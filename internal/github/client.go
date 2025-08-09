@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	userAgent     = "weekly-report-cli/1.0"
-	maxRetries    = 3
-	baseBackoffMs = 1000 // 1 second base backoff
+	userAgent        = "weekly-report-cli/1.0"
+	maxRetries       = 3
+	baseBackoffMs    = 1000        // 1 second base backoff
+	requestTimeoutSec = 30         // 30 second timeout per request
 )
 
 // New creates a new GitHub client with OAuth2 authentication and retry logic
@@ -23,8 +24,9 @@ func New(ctx context.Context, token string) *github.Client {
 	// Create OAuth2 token source
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
 	
-	// Create HTTP client with OAuth2 transport and retry logic
+	// Create HTTP client with OAuth2 transport, retry logic, and timeout
 	httpClient := &http.Client{
+		Timeout: requestTimeoutSec * time.Second,
 		Transport: &retryTransport{
 			base: &oauth2.Transport{
 				Source: ts,
@@ -62,6 +64,12 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				time.Sleep(backoffDuration)
 			}
 			continue
+		}
+
+		// Check if this is a non-retryable authorization error
+		if isAuthorizationError(resp) {
+			// Don't retry authorization errors, return immediately with descriptive error
+			return resp, nil
 		}
 
 		// Check if we should retry based on response status
@@ -139,6 +147,34 @@ func getRateLimitRetryAfter(resp *http.Response) time.Duration {
 	
 	// Default fallback for rate limits
 	return 60 * time.Second
+}
+
+// isAuthorizationError checks if the response indicates an authorization error that should not be retried
+func isAuthorizationError(resp *http.Response) bool {
+	// 401 Unauthorized - invalid token
+	if resp.StatusCode == http.StatusUnauthorized {
+		return true
+	}
+
+	// 403 Forbidden without rate limit headers - likely SSO authorization required
+	if resp.StatusCode == http.StatusForbidden {
+		// If this is a rate limit error, it's retryable
+		if resp.Header.Get("X-RateLimit-Remaining") != "" || 
+		   resp.Header.Get("Retry-After") != "" {
+			return false // This is a rate limit, not an authorization error
+		}
+		
+		// 403 without rate limit headers is likely an authorization issue
+		return true
+	}
+
+	// 404 Not Found on private repos can indicate insufficient permissions
+	if resp.StatusCode == http.StatusNotFound {
+		// This could be a real 404 or a permission issue, but we should not retry
+		return true
+	}
+
+	return false
 }
 
 // calculateBackoff calculates exponential backoff with jitter

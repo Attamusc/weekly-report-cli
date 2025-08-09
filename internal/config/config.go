@@ -13,6 +13,8 @@ type Config struct {
 	SinceDays   int
 	Concurrency int
 	Notes       bool
+	Verbose     bool
+	Quiet       bool
 	Models      struct {
 		BaseURL string
 		Model   string
@@ -21,7 +23,7 @@ type Config struct {
 }
 
 // FromEnvAndFlags creates a Config from environment variables and CLI flags
-func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, inputPath string) (*Config, error) {
+func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool, quiet bool, inputPath string) (*Config, error) {
 	// Load environment variables from .env file if it exists
 	_ = godotenv.Load() // Silently ignore if .env file doesn't exist
 	config := &Config{
@@ -29,6 +31,8 @@ func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, inputPath str
 		SinceDays:   sinceDays,
 		Concurrency: concurrency,
 		Notes:       !noNotes, // --no-notes inverts the boolean
+		Verbose:     verbose && !quiet, // verbose is disabled if quiet is set
+		Quiet:       quiet,
 	}
 
 	// Validate required GitHub token

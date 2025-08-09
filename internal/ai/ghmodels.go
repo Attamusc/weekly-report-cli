@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"math/rand"
 	"net/http"
@@ -61,12 +62,26 @@ const (
 
 // Summarize generates a summary for a single update using GitHub Models API
 func (c *GHModelsClient) Summarize(ctx context.Context, issueTitle, issueURL, updateText string) (string, error) {
+	// Get logger from context if available
+	logger, ok := ctx.Value("logger").(*slog.Logger)
+	if !ok {
+		logger = slog.Default()
+	}
+
+	logger.Debug("AI summarizing single update", "model", c.Model, "issue", issueURL)
 	userPrompt := fmt.Sprintf("Issue: %s (%s)\nUpdate:\n%s", issueTitle, issueURL, updateText)
 	return c.callAPI(ctx, userPrompt)
 }
 
 // SummarizeMany generates a summary for multiple updates using GitHub Models API
 func (c *GHModelsClient) SummarizeMany(ctx context.Context, issueTitle, issueURL string, updates []string) (string, error) {
+	// Get logger from context if available
+	logger, ok := ctx.Value("logger").(*slog.Logger)
+	if !ok {
+		logger = slog.Default()
+	}
+
+	logger.Debug("AI summarizing multiple updates", "model", c.Model, "issue", issueURL, "count", len(updates))
 	userPrompt := fmt.Sprintf("Issue: %s (%s)\nUpdates (newest first):", issueTitle, issueURL)
 	
 	for i, update := range updates {
@@ -78,6 +93,12 @@ func (c *GHModelsClient) SummarizeMany(ctx context.Context, issueTitle, issueURL
 
 // callAPI makes the actual HTTP request to GitHub Models API with retry logic
 func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string) (string, error) {
+	// Get logger from context if available
+	logger, ok := ctx.Value("logger").(*slog.Logger)
+	if !ok {
+		logger = slog.Default()
+	}
+
 	request := chatCompletionRequest{
 		Model:       c.Model,
 		Temperature: temperature,
@@ -87,12 +108,15 @@ func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string) (string
 		},
 	}
 	
+	logger.Debug("Starting AI API request", "model", c.Model, "temperature", temperature, "maxRetries", maxRetries)
+	
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			// Apply jittered exponential backoff
 			delay := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
 			jitter := time.Duration(rand.Float64() * float64(delay) * 0.1) // 10% jitter
+			logger.Debug("AI API retry backoff", "attempt", attempt, "delay", delay+jitter)
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
@@ -100,15 +124,18 @@ func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string) (string
 			}
 		}
 		
+		logger.Debug("AI API request attempt", "attempt", attempt+1, "maxRetries", maxRetries)
 		response, err := c.makeHTTPRequest(ctx, request)
 		if err != nil {
 			lastErr = err
 			
 			// Check if it's a rate limit error (429)
 			if httpErr, ok := err.(*HTTPError); ok && httpErr.StatusCode == 429 {
+				logger.Debug("AI API rate limited", "attempt", attempt+1, "statusCode", httpErr.StatusCode)
 				// Extract retry-after header if present
 				if retryAfter := httpErr.Headers.Get("Retry-After"); retryAfter != "" {
 					if seconds, parseErr := strconv.Atoi(retryAfter); parseErr == nil {
+						logger.Debug("AI API rate limit backoff", "retryAfter", seconds)
 						select {
 						case <-ctx.Done():
 							return "", ctx.Err()
@@ -119,19 +146,23 @@ func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string) (string
 				continue // Retry on rate limit
 			}
 			
+			logger.Debug("AI API request failed", "attempt", attempt+1, "error", err)
 			// For other errors, return immediately
 			return "", fmt.Errorf("GitHub Models API request failed: %w", err)
 		}
 		
 		// Success - extract and return the response
 		if len(response.Choices) == 0 {
+			logger.Debug("AI API returned empty response")
 			return "", fmt.Errorf("GitHub Models API returned empty response")
 		}
 		
 		summary := response.Choices[0].Message.Content
+		logger.Debug("AI API request succeeded", "attempt", attempt+1, "summaryLength", len(summary))
 		return summary, nil
 	}
 	
+	logger.Debug("AI API failed after all retries", "maxRetries", maxRetries, "lastError", lastErr)
 	return "", fmt.Errorf("GitHub Models API failed after %d retries: %w", maxRetries, lastErr)
 }
 

@@ -38,32 +38,32 @@ func RenderTable(rows []Row) string {
 	}
 
 	var builder strings.Builder
-	
+
 	// Write table header
 	builder.WriteString("| Status | Initiative/Epic | Target Date | Update |\n")
 	builder.WriteString("|--------|-----------------|-------------|--------|\n")
-	
+
 	// Write each row
 	for _, row := range rows {
 		// Format status column
 		statusCol := fmt.Sprintf("%s %s", row.StatusEmoji, row.StatusCaption)
-		
+
 		// Format epic column with markdown link
-		epicCol := fmt.Sprintf("[Epic: %s](%s)", 
-			escapeMarkdownTableCell(row.EpicTitle), 
+		epicCol := fmt.Sprintf("[%s](%s)",
+			escapeMarkdownTableCell(row.EpicTitle),
 			row.EpicURL)
-		
+
 		// Format target date column
 		dateCol := derive.RenderTargetDate(row.TargetDate)
-		
+
 		// Format update column (collapse newlines and escape pipes)
 		updateCol := escapeMarkdownTableCell(collapseNewlines(row.UpdateMD))
-		
+
 		// Write the row
 		builder.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n",
 			statusCol, epicCol, dateCol, updateCol))
 	}
-	
+
 	return builder.String()
 }
 
@@ -71,16 +71,16 @@ func RenderTable(rows []Row) string {
 func escapeMarkdownTableCell(content string) string {
 	// First escape existing backslashes to prevent unintended escaping
 	content = strings.ReplaceAll(content, "\\", "\\\\")
-	
+
 	// Then replace pipe characters that would break table formatting
 	content = strings.ReplaceAll(content, "|", "\\|")
-	
+
 	// Use collapseNewlines to properly handle line endings and spacing
 	content = collapseNewlines(content)
-	
+
 	// Replace tabs
 	content = strings.ReplaceAll(content, "\t", " ")
-	
+
 	return strings.TrimSpace(content)
 }
 
@@ -91,12 +91,12 @@ func collapseNewlines(content string) string {
 	// Then replace remaining Unix and Mac line endings
 	content = strings.ReplaceAll(content, "\n", " ")
 	content = strings.ReplaceAll(content, "\r", " ")
-	
+
 	// Collapse multiple spaces into single spaces
 	for strings.Contains(content, "  ") {
 		content = strings.ReplaceAll(content, "  ", " ")
 	}
-	
+
 	return strings.TrimSpace(content)
 }
 
@@ -106,13 +106,14 @@ func RenderTableWithTitle(title string, rows []Row) string {
 	if table == "" {
 		return ""
 	}
-	
+
 	if title == "" {
 		return table
 	}
-	
+
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf("# %s\n\n", title))
 	builder.WriteString(table)
 	return builder.String()
 }
+
