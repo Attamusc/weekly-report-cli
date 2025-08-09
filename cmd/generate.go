@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Attamusc/weekly-report-cli/internal/ai"
 	"github.com/Attamusc/weekly-report-cli/internal/config"
 	"github.com/Attamusc/weekly-report-cli/internal/input"
 	"github.com/spf13/cobra"
@@ -66,12 +67,21 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		os.Exit(2) // Exit code 2 for no rows produced
 	}
 
-	// TODO: Phase 1 complete - the pipeline skeleton is ready
+	// Initialize summarizer based on configuration
+	var summarizer ai.Summarizer
+	if cfg.Models.Enabled {
+		summarizer = ai.NewGHModelsClient(cfg.Models.BaseURL, cfg.Models.Model, cfg.GitHubToken)
+		fmt.Printf("✓ AI summarization enabled (model: %s)\n", cfg.Models.Model)
+	} else {
+		summarizer = ai.NewNoopSummarizer()
+		fmt.Printf("✓ AI summarization disabled\n")
+	}
+	_ = summarizer // TODO: Will be used in Phase 4 pipeline integration
+
+	// TODO: Phase 3 complete - AI summarization ready
 	// The following phases will implement:
-	// - GitHub API client and issue fetching (Phase 2)
-	// - Report extraction and selection (Phase 2) 
-	// - AI summarization (Phase 3)
 	// - Status mapping and markdown rendering (Phase 4)
+	// - Full pipeline integration with GitHub API and report processing
 
 	fmt.Printf("Found %d issue(s) to process:\n", len(issueRefs))
 	for _, ref := range issueRefs {
@@ -82,11 +92,6 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	fmt.Printf("- Since days: %d\n", cfg.SinceDays)
 	fmt.Printf("- Concurrency: %d\n", cfg.Concurrency) 
 	fmt.Printf("- Notes enabled: %t\n", cfg.Notes)
-	fmt.Printf("- AI summarization: %t\n", cfg.Models.Enabled)
-	if cfg.Models.Enabled {
-		fmt.Printf("- AI model: %s\n", cfg.Models.Model)
-		fmt.Printf("- AI base URL: %s\n", cfg.Models.BaseURL)
-	}
 
 	return nil
 }

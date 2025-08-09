@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"os"
+
+	"github.com/joho/godotenv"
 )
 
 // Config holds all configuration for the application
@@ -20,6 +22,8 @@ type Config struct {
 
 // FromEnvAndFlags creates a Config from environment variables and CLI flags
 func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, inputPath string) (*Config, error) {
+	// Load environment variables from .env file if it exists
+	_ = godotenv.Load() // Silently ignore if .env file doesn't exist
 	config := &Config{
 		GitHubToken: os.Getenv("GITHUB_TOKEN"),
 		SinceDays:   sinceDays,
