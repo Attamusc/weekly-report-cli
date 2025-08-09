@@ -43,7 +43,7 @@ Affected files + summary
 • --no-notes (bool, default false)
 Env:
 • required GITHUB_TOKEN (private repos + GitHub Models)
-• optional GITHUB_MODELS_BASE_URL (default <https://models.github.ai/v1>)
+• optional GITHUB_MODELS_BASE_URL (default <https://models.github.ai>)
 • optional GITHUB_MODELS_MODEL (default gpt-4o-mini)
 • optional DISABLE_SUMMARY (if set, disable AI)
 • cmd/generate.go: read links → bounded worker pool → per-issue pipeline → accumulate rows + notes → write to stdout.

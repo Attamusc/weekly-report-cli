@@ -125,7 +125,7 @@ go build -o weekly-report-cli .
 - `GITHUB_TOKEN` - Personal Access Token for private repos and GitHub Models API
 
 ### Optional Environment Variables  
-- `GITHUB_MODELS_BASE_URL` - Default: `https://models.github.ai/v1`
+- `GITHUB_MODELS_BASE_URL` - Default: `https://models.github.ai`
 - `GITHUB_MODELS_MODEL` - Default: `gpt-4o-mini`
 - `DISABLE_SUMMARY` - Set to disable AI summarization
 

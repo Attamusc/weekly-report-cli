@@ -63,7 +63,7 @@ CGO_ENABLED=0 go build -ldflags="-s -w" -o weekly-report-cli .
 - `GITHUB_TOKEN` - Personal Access Token for GitHub API access and GitHub Models
 
 #### Optional
-- `GITHUB_MODELS_BASE_URL` - Base URL for GitHub Models API (default: `https://models.github.ai/v1`)
+- `GITHUB_MODELS_BASE_URL` - Base URL for GitHub Models API (default: `https://models.github.ai`)
 - `GITHUB_MODELS_MODEL` - AI model to use (default: `gpt-4o-mini`)
 - `DISABLE_SUMMARY` - Set to any value to disable AI summarization
 

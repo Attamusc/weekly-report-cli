@@ -43,7 +43,7 @@ func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool,
 	// Set up AI models configuration
 	config.Models.BaseURL = os.Getenv("GITHUB_MODELS_BASE_URL")
 	if config.Models.BaseURL == "" {
-		config.Models.BaseURL = "https://models.github.ai/v1"
+		config.Models.BaseURL = "https://models.github.ai"
 	}
 
 	config.Models.Model = os.Getenv("GITHUB_MODELS_MODEL")
