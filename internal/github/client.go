@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	userAgent     = "gh-epic-updates/1.0"
+	userAgent     = "weekly-report-cli/1.0"
 	maxRetries    = 3
 	baseBackoffMs = 1000 // 1 second base backoff
 )

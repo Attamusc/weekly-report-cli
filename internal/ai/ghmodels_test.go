@@ -91,8 +91,8 @@ func TestGHModelsClient_Summarize(t *testing.T) {
 					t.Errorf("Expected Content-Type: application/json")
 				}
 				
-				if r.Header.Get("User-Agent") != "gh-epic-updates/1.0" {
-					t.Errorf("Expected User-Agent: gh-epic-updates/1.0")
+				if r.Header.Get("User-Agent") != "weekly-report-cli/1.0" {
+					t.Errorf("Expected User-Agent: weekly-report-cli/1.0")
 				}
 				
 				// Verify request body

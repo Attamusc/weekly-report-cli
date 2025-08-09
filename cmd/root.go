@@ -5,9 +5,9 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "gh-epic-updates",
+	Use:   "weekly-report-cli",
 	Short: "Generate weekly status reports from GitHub issues",
-	Long: `gh-epic-updates is a CLI tool that generates weekly status reports by parsing
+	Long: `weekly-report-cli is a CLI tool that generates weekly status reports by parsing
 structured data from GitHub issue comments. It fetches GitHub issues, extracts
 status report data using HTML comment markers, and generates markdown tables
 with optional AI summarization.`,

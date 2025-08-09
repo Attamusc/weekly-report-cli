@@ -39,7 +39,7 @@ Thumbs.db
 .env.*.local
 
 # Application specific
-gh-epic-updates
+weekly-report-cli
 /dist/
 /build/
 

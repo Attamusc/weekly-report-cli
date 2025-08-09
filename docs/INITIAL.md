@@ -36,7 +36,7 @@ PHASE 1 — CLI, config, link parsing
 Affected files + summary
 • go.mod, go.sum: add github.com/spf13/cobra, github.com/google/go-github/v66/github, golang.org/x/oauth2.
 • main.go: cobra root execute.
-• cmd/root.go: define gh-epic-updates with flags:
+• cmd/root.go: define weekly-report-cli with flags:
 • --since-days (int, default 7)
 • --input (path, default stdin)
 • --concurrency (int, default 4)
@@ -76,7 +76,7 @@ Affected files + summary
 • internal/github/client.go:
 
 func New(ctx context.Context, token string) \*github.Client
-// oauth2 transport, UA "gh-epic-updates/1.0"
+// oauth2 transport, UA "weekly-report-cli/1.0"
 // retry/backoff on 5xx and 403 w/ RateLimit-Reset / Retry-After
 
     • internal/github/issues.go:
@@ -239,7 +239,7 @@ Unit tests
 
 COMMAND INTERFACE
 
-cat links.txt | gh-epic-updates generate --since-days 7
+cat links.txt | weekly-report-cli generate --since-days 7
 
     • Input: newline-separated GitHub issue URLs (stdin or --input).
     • Auth: required GITHUB_TOKEN (private repo + GitHub Models access).

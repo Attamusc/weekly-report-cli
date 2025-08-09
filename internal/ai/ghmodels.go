@@ -150,7 +150,7 @@ func (c *GHModelsClient) makeHTTPRequest(ctx context.Context, request chatComple
 	
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.Token)
-	req.Header.Set("User-Agent", "gh-epic-updates/1.0")
+	req.Header.Set("User-Agent", "weekly-report-cli/1.0")
 	
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

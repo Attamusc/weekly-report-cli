@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Go CLI tool called `gh-epic-updates` that generates weekly status reports by parsing structured data from GitHub issue comments. The tool fetches GitHub issues, extracts status report data using HTML comment markers, and generates markdown tables with optional AI summarization via GitHub Models.
+This is a Go CLI tool called `weekly-report-cli` that generates weekly status reports by parsing structured data from GitHub issue comments. The tool fetches GitHub issues, extracts status report data using HTML comment markers, and generates markdown tables with optional AI summarization via GitHub Models.
 
 ## Architecture
 
@@ -42,29 +42,81 @@ The application follows a 4-phase pipeline architecture:
 
 ## Development Commands
 
-Since this is a new Go project, standard Go commands will be used:
+This project includes a comprehensive Makefile for development tasks:
 
+### Quick Development Cycle
 ```bash
-# Initialize Go module (when creating)
-go mod init github.com/Attamusc/weekly-report-cli
+# Complete development pipeline (recommended)
+make all
 
-# Add dependencies
+# Build binary
+make build
+
+# Run all tests
+make test
+
+# Format, lint, and test code
+make check
+
+# Install dependencies
+make deps
+```
+
+### Build Variants
+```bash
+# Development build
+make build
+
+# Production build (optimized)
+make build-prod
+
+# Cross-platform builds
+make build-all
+
+# Create release archives
+make release
+```
+
+### Testing & Quality
+```bash
+# Run tests with race detection
+make test-race
+
+# Generate coverage report
+make coverage
+
+# Run security scan
+make security
+
+# Check for vulnerabilities
+make vuln
+
+# Run benchmarks
+make bench
+```
+
+### Development Workflow
+```bash
+# File watching for development
+make dev
+
+# Run with sample data
+make run-example
+
+# Install development tools
+make install-lint
+
+# View all available targets
+make help
+```
+
+### Legacy Go Commands (still available)
+```bash
+# Manual Go commands if needed
 go mod tidy
-
-# Build the CLI
-go build -o gh-epic-updates .
-
-# Run tests
 go test ./...
-
-# Run specific test package
-go test ./internal/report
-
-# Run with race detection
 go test -race ./...
-
-# Build for production
-CGO_ENABLED=0 go build -ldflags="-s -w" -o gh-epic-updates .
+go build -o weekly-report-cli .
 ```
 
 ## Configuration
@@ -80,10 +132,10 @@ CGO_ENABLED=0 go build -ldflags="-s -w" -o gh-epic-updates .
 ### CLI Usage
 ```bash
 # Basic usage with stdin
-cat links.txt | gh-epic-updates generate --since-days 7
+cat links.txt | weekly-report-cli generate --since-days 7
 
 # With file input
-gh-epic-updates generate --input links.txt --since-days 14 --no-notes
+weekly-report-cli generate --input links.txt --since-days 14 --no-notes
 ```
 
 ## Key Implementation Details
