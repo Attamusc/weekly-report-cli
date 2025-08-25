@@ -12,8 +12,8 @@ func TestRenderNotes(t *testing.T) {
 		expected string
 	}{
 		{
-			name:  "empty notes",
-			notes: []Note{},
+			name:     "empty notes",
+			notes:    []Note{},
 			expected: "",
 		},
 		{
@@ -96,7 +96,7 @@ func TestRenderNotes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := RenderNotes(tt.notes)
 			if result != tt.expected {
-				t.Errorf("RenderNotes() mismatch\nExpected:\n%s\nGot:\n%s", 
+				t.Errorf("RenderNotes() mismatch\nExpected:\n%s\nGot:\n%s",
 					tt.expected, result)
 			}
 		})
@@ -160,7 +160,7 @@ func TestRenderNoteBullet(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := renderNoteBullet(tt.note)
 			if result != tt.expected {
-				t.Errorf("renderNoteBullet(%+v) = %q, expected %q", 
+				t.Errorf("renderNoteBullet(%+v) = %q, expected %q",
 					tt.note, result, tt.expected)
 			}
 		})
@@ -214,7 +214,7 @@ func TestPluralizeDays(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := pluralizeDays(tt.days)
 			if result != tt.expected {
-				t.Errorf("pluralizeDays(%d) = %q, expected %q", 
+				t.Errorf("pluralizeDays(%d) = %q, expected %q",
 					tt.days, result, tt.expected)
 			}
 		})
@@ -314,14 +314,14 @@ func TestFilterNotesByKind(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := FilterNotesByKind(tt.notes, tt.kind)
 			if len(result) != tt.expected {
-				t.Errorf("FilterNotesByKind() returned %d notes, expected %d", 
+				t.Errorf("FilterNotesByKind() returned %d notes, expected %d",
 					len(result), tt.expected)
 			}
-			
+
 			// Verify all returned notes have the correct kind
 			for _, note := range result {
 				if note.Kind != tt.kind {
-					t.Errorf("FilterNotesByKind() returned note with kind %v, expected %v", 
+					t.Errorf("FilterNotesByKind() returned note with kind %v, expected %v",
 						note.Kind, tt.kind)
 				}
 			}
@@ -428,7 +428,7 @@ func TestNotesStructureAndFormat(t *testing.T) {
 
 	for i, pattern := range expectedPatterns {
 		if !strings.Contains(lines[i+2], pattern) {
-			t.Errorf("Line %d should contain %q, got %q", 
+			t.Errorf("Line %d should contain %q, got %q",
 				i+2, pattern, lines[i+2])
 		}
 	}

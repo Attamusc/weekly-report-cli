@@ -163,7 +163,7 @@ func TestFetchCommentsSince(t *testing.T) {
 		t.Errorf("expected first comment author 'user2', got %s", comments[0].Author)
 	}
 
-	// Verify second comment  
+	// Verify second comment
 	if comments[1].Body != "Another comment in window" {
 		t.Errorf("expected second comment body 'Another comment in window', got %s", comments[1].Body)
 	}
@@ -225,4 +225,3 @@ func TestFetchCommentsSince_NoComments(t *testing.T) {
 		t.Errorf("expected 0 comments, got %d", len(comments))
 	}
 }
-

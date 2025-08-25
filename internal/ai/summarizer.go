@@ -9,7 +9,7 @@ import (
 type Summarizer interface {
 	// Summarize generates a summary for a single update
 	Summarize(ctx context.Context, issueTitle, issueURL, updateText string) (string, error)
-	
+
 	// SummarizeMany generates a summary for multiple updates (newest first)
 	SummarizeMany(ctx context.Context, issueTitle, issueURL string, updates []string) (string, error)
 }

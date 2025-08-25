@@ -21,7 +21,7 @@ type Report struct {
 var (
 	// Case-insensitive regex for the report marker
 	reportMarkerRegex = regexp.MustCompile(`(?i)<!--\s*data\s+key\s*=\s*"isReport"\s+value\s*=\s*"true"\s*-->`)
-	
+
 	// Regex for extracting keyed data blocks
 	// Matches: <!-- data key="<key>" start --> content <!-- data end -->
 	// (?s) enables dotall mode so . matches newlines

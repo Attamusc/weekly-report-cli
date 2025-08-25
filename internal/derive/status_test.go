@@ -189,7 +189,7 @@ func TestMapTrending(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := MapTrending(tt.input)
 			if result != tt.expected {
-				t.Errorf("MapTrending(%q) = %+v, expected %+v", 
+				t.Errorf("MapTrending(%q) = %+v, expected %+v",
 					tt.input, result, tt.expected)
 			}
 		})
@@ -221,6 +221,11 @@ func TestStatusString(t *testing.T) {
 			name:     "not started",
 			status:   NotStarted,
 			expected: ":white_circle: Not Started",
+		},
+		{
+			name:     "needs update",
+			status:   NeedsUpdate,
+			expected: ":white_circle: Needs Update",
 		},
 		{
 			name:     "done",
@@ -296,7 +301,7 @@ func TestCircleEmojiRegex(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := circleEmojiRegex.ReplaceAllString(tt.input, "")
 			if result != tt.expected {
-				t.Errorf("circleEmojiRegex.ReplaceAllString(%q) = %q, expected %q", 
+				t.Errorf("circleEmojiRegex.ReplaceAllString(%q) = %q, expected %q",
 					tt.input, result, tt.expected)
 			}
 		})

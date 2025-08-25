@@ -67,7 +67,7 @@ func TestParseReport_CaseInsensitiveMarker(t *testing.T) {
 	for i, marker := range testCases {
 		body := fmt.Sprintf(baseBody, marker)
 		_, ok := ParseReport(body, time.Now(), "test-url")
-		
+
 		if !ok {
 			t.Errorf("test case %d failed: marker should be case-insensitive: %s", i, marker)
 		}
@@ -93,7 +93,7 @@ func TestParseReport_PartialData(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "only update", 
+			name: "only update",
 			body: `<!-- data key="isReport" value="true" -->
 <!-- data key="update" start -->Working on feature X<!-- data end -->`,
 			want: true,
@@ -218,4 +218,3 @@ Some text in between.
 		t.Errorf("expected update 'Latest progress update', got '%s'", report.UpdateRaw)
 	}
 }
-

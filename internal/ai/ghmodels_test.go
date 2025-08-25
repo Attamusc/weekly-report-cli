@@ -64,10 +64,10 @@ func TestGHModelsClient_Summarize(t *testing.T) {
 			expectedError: "GitHub Models API request failed",
 		},
 		{
-			name:       "invalid JSON response",
-			issueTitle: "Update dependencies",
-			issueURL:   "https://github.com/owner/repo/issues/321",
-			updateText: "Updated all packages to latest versions.",
+			name:          "invalid JSON response",
+			issueTitle:    "Update dependencies",
+			issueURL:      "https://github.com/owner/repo/issues/321",
+			updateText:    "Updated all packages to latest versions.",
 			statusCode:    200,
 			responseBody:  `invalid json`,
 			expectedError: "failed to unmarshal response",
@@ -82,46 +82,46 @@ func TestGHModelsClient_Summarize(t *testing.T) {
 				if r.Method != "POST" {
 					t.Errorf("Expected POST request, got %s", r.Method)
 				}
-				
+
 				if r.Header.Get("Authorization") != "Bearer test-token" {
 					t.Errorf("Expected Authorization header with Bearer token")
 				}
-				
+
 				if r.Header.Get("Content-Type") != "application/json" {
 					t.Errorf("Expected Content-Type: application/json")
 				}
-				
+
 				if r.Header.Get("User-Agent") != "weekly-report-cli/1.0" {
 					t.Errorf("Expected User-Agent: weekly-report-cli/1.0")
 				}
-				
+
 				// Verify request body
 				var request chatCompletionRequest
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Errorf("Failed to decode request body: %v", err)
 				}
-				
+
 				// Verify request structure
 				if request.Model != "gpt-4o-mini" {
 					t.Errorf("Expected model gpt-4o-mini, got %s", request.Model)
 				}
-				
+
 				if request.Temperature != 0.2 {
 					t.Errorf("Expected temperature 0.2, got %f", request.Temperature)
 				}
-				
+
 				if len(request.Messages) != 2 {
 					t.Errorf("Expected 2 messages, got %d", len(request.Messages))
 				}
-				
+
 				if request.Messages[0].Role != "system" {
 					t.Errorf("Expected first message role 'system', got %s", request.Messages[0].Role)
 				}
-				
+
 				if request.Messages[1].Role != "user" {
 					t.Errorf("Expected second message role 'user', got %s", request.Messages[1].Role)
 				}
-				
+
 				// Verify user prompt contains expected content
 				userContent := request.Messages[1].Content
 				if !strings.Contains(userContent, tt.issueTitle) {
@@ -133,7 +133,7 @@ func TestGHModelsClient_Summarize(t *testing.T) {
 				if !strings.Contains(userContent, tt.updateText) {
 					t.Errorf("User prompt should contain update text")
 				}
-				
+
 				// Send response
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(tt.statusCode)
@@ -142,7 +142,7 @@ func TestGHModelsClient_Summarize(t *testing.T) {
 			defer server.Close()
 
 			// Create client
-			client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token")
+			client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "")
 
 			// Call method
 			ctx := context.Background()
@@ -172,7 +172,7 @@ func TestGHModelsClient_SummarizeMany(t *testing.T) {
 		// Verify request
 		var request chatCompletionRequest
 		json.NewDecoder(r.Body).Decode(&request)
-		
+
 		// Verify user prompt format for multiple updates
 		userContent := request.Messages[1].Content
 		expectedPatterns := []string{
@@ -183,13 +183,13 @@ func TestGHModelsClient_SummarizeMany(t *testing.T) {
 			"2) Second update text",
 			"3) Third update text",
 		}
-		
+
 		for _, pattern := range expectedPatterns {
 			if !strings.Contains(userContent, pattern) {
 				t.Errorf("User prompt should contain '%s', got: %s", pattern, userContent)
 			}
 		}
-		
+
 		// Send response
 		response := `{
 			"choices": [
@@ -207,21 +207,21 @@ func TestGHModelsClient_SummarizeMany(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token")
-	
+	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "")
+
 	updates := []string{
 		"First update text",
-		"Second update text", 
+		"Second update text",
 		"Third update text",
 	}
-	
+
 	ctx := context.Background()
 	result, err := client.SummarizeMany(ctx, "Multiple updates test", "https://github.com/test/repo/issues/1", updates)
-	
+
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}
-	
+
 	expected := "Completed three development phases with successful testing and deployment."
 	if result != expected {
 		t.Errorf("Expected result '%s', got '%s'", expected, result)
@@ -232,7 +232,7 @@ func TestGHModelsClient_RetryOnRateLimit(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		
+
 		if callCount == 1 {
 			// First call returns 429
 			w.Header().Set("Retry-After", "1")
@@ -240,7 +240,7 @@ func TestGHModelsClient_RetryOnRateLimit(t *testing.T) {
 			w.Write([]byte(`{"error": {"message": "Rate limited"}}`))
 			return
 		}
-		
+
 		// Second call succeeds
 		response := `{
 			"choices": [
@@ -258,19 +258,19 @@ func TestGHModelsClient_RetryOnRateLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token")
-	
+	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "")
+
 	ctx := context.Background()
 	result, err := client.Summarize(ctx, "Test", "https://github.com/test/repo/issues/1", "Update text")
-	
+
 	if err != nil {
 		t.Errorf("Expected no error after retry, got %v", err)
 	}
-	
+
 	if result != "Success after retry." {
 		t.Errorf("Expected success result, got '%s'", result)
 	}
-	
+
 	if callCount != 2 {
 		t.Errorf("Expected 2 API calls (1 failure + 1 success), got %d", callCount)
 	}
@@ -285,20 +285,123 @@ func TestGHModelsClient_ContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token")
-	
+	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "")
+
 	// Create context that cancels immediately
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	
+
 	_, err := client.Summarize(ctx, "Test", "https://github.com/test/repo/issues/1", "Update text")
-	
+
 	if err == nil {
 		t.Error("Expected context cancellation error")
 	}
-	
+
 	if !strings.Contains(err.Error(), "context canceled") {
 		t.Errorf("Expected context canceled error, got %v", err)
+	}
+}
+
+func TestGHModelsClient_CustomSystemPrompt(t *testing.T) {
+	customPrompt := "This is a custom prompt for testing purposes."
+	
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request contains custom prompt
+		var request chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("Failed to decode request body: %v", err)
+		}
+
+		if len(request.Messages) != 2 {
+			t.Errorf("Expected 2 messages, got %d", len(request.Messages))
+		}
+
+		if request.Messages[0].Role != "system" {
+			t.Errorf("Expected first message role 'system', got %s", request.Messages[0].Role)
+		}
+
+		if request.Messages[0].Content != customPrompt {
+			t.Errorf("Expected system prompt '%s', got '%s'", customPrompt, request.Messages[0].Content)
+		}
+
+		// Send response
+		response := `{
+			"choices": [
+				{
+					"message": {
+						"role": "assistant", 
+						"content": "Custom response."
+					}
+				}
+			]
+		}`
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(response))
+	}))
+	defer server.Close()
+
+	// Create client with custom prompt
+	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", customPrompt)
+
+	ctx := context.Background()
+	result, err := client.Summarize(ctx, "Test Issue", "https://github.com/test/repo/issues/1", "Test update")
+
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	if result != "Custom response." {
+		t.Errorf("Expected 'Custom response.', got '%s'", result)
+	}
+}
+
+func TestGHModelsClient_DefaultSystemPrompt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request contains default prompt
+		var request chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("Failed to decode request body: %v", err)
+		}
+
+		expectedDefaultPrompt := `Refine the content in the engineering status updates to be one
+	paragraph of roughly 3-5 sentences, present tense, third-person, markdown-ready, 
+	no prefatory text. Keep relevant looking links intact in markdown format. 
+	Attempt to not lose context when summarizing.`
+
+		if request.Messages[0].Content != expectedDefaultPrompt {
+			t.Errorf("Expected default system prompt, got '%s'", request.Messages[0].Content)
+		}
+
+		// Send response
+		response := `{
+			"choices": [
+				{
+					"message": {
+						"role": "assistant", 
+						"content": "Default response."
+					}
+				}
+			]
+		}`
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(response))
+	}))
+	defer server.Close()
+
+	// Create client with empty prompt (should use default)
+	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "")
+
+	ctx := context.Background()
+	result, err := client.Summarize(ctx, "Test Issue", "https://github.com/test/repo/issues/1", "Test update")
+
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	if result != "Default response." {
+		t.Errorf("Expected 'Default response.', got '%s'", result)
 	}
 }
 
@@ -309,11 +412,11 @@ func TestValidateWordCount(t *testing.T) {
 		"Fixed database connection issues and improved query performance significantly.",
 		"This is a very long response that exceeds the thirty-five word limit that we have set for our AI summarization system to ensure concise and readable status updates for engineering teams working on complex software development projects with multiple stakeholders and requirements.",
 	}
-	
+
 	for i, response := range responses {
 		words := strings.Fields(response)
 		wordCount := len(words)
-		
+
 		if i < 2 {
 			// First two should be ≤35 words
 			if wordCount > 35 {

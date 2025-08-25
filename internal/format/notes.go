@@ -31,10 +31,10 @@ func RenderNotes(notes []Note) string {
 	}
 
 	var builder strings.Builder
-	
+
 	// Write section header
 	builder.WriteString("## Notes\n\n")
-	
+
 	// Write each note as a bullet point
 	for _, note := range notes {
 		bullet := renderNoteBullet(note)
@@ -42,7 +42,7 @@ func RenderNotes(notes []Note) string {
 			builder.WriteString(fmt.Sprintf("- %s\n", bullet))
 		}
 	}
-	
+
 	return builder.String()
 }
 
@@ -52,15 +52,15 @@ func renderNoteBullet(note Note) string {
 	case NoteMultipleUpdates:
 		// Handle pluralization for days
 		dayText := pluralizeDays(note.SinceDays)
-		return fmt.Sprintf("%s: multiple structured updates in last %s", 
+		return fmt.Sprintf("%s: multiple structured updates in last %s",
 			note.IssueURL, dayText)
-			
+
 	case NoteNoUpdatesInWindow:
 		// Handle pluralization for days
 		dayText := pluralizeDays(note.SinceDays)
-		return fmt.Sprintf("%s: no update in last %s", 
+		return fmt.Sprintf("%s: no update in last %s",
 			note.IssueURL, dayText)
-			
+
 	default:
 		// Unknown note kind, return empty string
 		return ""

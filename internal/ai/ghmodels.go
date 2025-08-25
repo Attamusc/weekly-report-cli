@@ -16,19 +16,21 @@ import (
 
 // GHModelsClient implements Summarizer using GitHub Models API
 type GHModelsClient struct {
-	HTTP    *http.Client
-	BaseURL string
-	Model   string
-	Token   string
+	HTTP         *http.Client
+	BaseURL      string
+	Model        string
+	Token        string
+	SystemPrompt string
 }
 
 // NewGHModelsClient creates a new GitHub Models API client
-func NewGHModelsClient(baseURL, model, token string) *GHModelsClient {
+func NewGHModelsClient(baseURL, model, token, systemPrompt string) *GHModelsClient {
 	return &GHModelsClient{
 		HTTP:    &http.Client{Timeout: 30 * time.Second},
 		BaseURL: baseURL,
 		Model:   model,
 		Token:   token,
+		SystemPrompt: systemPrompt,
 	}
 }
 
@@ -54,11 +56,22 @@ type choice struct {
 }
 
 const (
-	systemPrompt = "Refine the content in the engineering status updates to be one paragraph of roughly 3-5 sentences, present tense, markdown-ready, no prefatory text. Keep relevant looking links intact in markdown format. Attempt to not lose any content of substance."
-	temperature  = 0.2
-	maxRetries   = 3
-	baseDelay    = 1 * time.Second
+	defaultSystemPrompt = `Refine the content in the engineering status updates to be one
+	paragraph of roughly 3-5 sentences, present tense, third-person, markdown-ready, 
+	no prefatory text. Keep relevant looking links intact in markdown format. 
+	Attempt to not lose context when summarizing.`
+	temperature = 0.2
+	maxRetries  = 3
+	baseDelay   = 1 * time.Second
 )
+
+// getSystemPrompt returns the configured system prompt or the default if empty
+func (c *GHModelsClient) getSystemPrompt() string {
+	if c.SystemPrompt != "" {
+		return c.SystemPrompt
+	}
+	return defaultSystemPrompt
+}
 
 // Summarize generates a summary for a single update using GitHub Models API
 func (c *GHModelsClient) Summarize(ctx context.Context, issueTitle, issueURL, updateText string) (string, error) {
@@ -103,7 +116,7 @@ func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string) (string
 		Model:       c.Model,
 		Temperature: temperature,
 		Messages: []message{
-			{Role: "system", Content: systemPrompt},
+			{Role: "system", Content: c.getSystemPrompt()},
 			{Role: "user", Content: userPrompt},
 		},
 	}

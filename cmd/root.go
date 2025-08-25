@@ -24,4 +24,3 @@ func Execute() error {
 func init() {
 	// Global flags will be added here when generate command is implemented
 }
-

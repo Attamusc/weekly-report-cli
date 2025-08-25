@@ -125,22 +125,22 @@ func TestParseTargetDate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := ParseTargetDate(tt.input)
-			
+
 			// Both nil
 			if tt.expected == nil && result == nil {
 				return
 			}
-			
+
 			// One nil, one not
 			if (tt.expected == nil) != (result == nil) {
-				t.Errorf("ParseTargetDate(%q) = %v, expected %v", 
+				t.Errorf("ParseTargetDate(%q) = %v, expected %v",
 					tt.input, result, tt.expected)
 				return
 			}
-			
+
 			// Both not nil - compare times
 			if !tt.expected.Equal(*result) {
-				t.Errorf("ParseTargetDate(%q) = %v, expected %v", 
+				t.Errorf("ParseTargetDate(%q) = %v, expected %v",
 					tt.input, result, tt.expected)
 			}
 		})
@@ -202,7 +202,7 @@ func TestRenderTargetDate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := RenderTargetDate(tt.input)
 			if result != tt.expected {
-				t.Errorf("RenderTargetDate(%v) = %q, expected %q", 
+				t.Errorf("RenderTargetDate(%v) = %q, expected %q",
 					tt.input, result, tt.expected)
 			}
 		})
@@ -264,7 +264,7 @@ func TestIsValidDate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := IsValidDate(tt.input)
 			if result != tt.expected {
-				t.Errorf("IsValidDate(%q) = %t, expected %t", 
+				t.Errorf("IsValidDate(%q) = %t, expected %t",
 					tt.input, result, tt.expected)
 			}
 		})
@@ -274,10 +274,10 @@ func TestIsValidDate(t *testing.T) {
 func TestParseTargetDateTimezoneConsistency(t *testing.T) {
 	// Test that dates are consistently converted to UTC regardless of input timezone
 	inputs := []string{
-		"2025-08-06T10:30:00Z",        // UTC
-		"2025-08-06T10:30:00+00:00",   // UTC with offset
-		"2025-08-06T02:30:00-08:00",   // PST (same as UTC 10:30)
-		"2025-08-06T06:30:00-04:00",   // EDT (same as UTC 10:30)
+		"2025-08-06T10:30:00Z",      // UTC
+		"2025-08-06T10:30:00+00:00", // UTC with offset
+		"2025-08-06T02:30:00-08:00", // PST (same as UTC 10:30)
+		"2025-08-06T06:30:00-04:00", // EDT (same as UTC 10:30)
 	}
 
 	var results []*time.Time
@@ -301,7 +301,7 @@ func TestParseTargetDateTimezoneConsistency(t *testing.T) {
 	// All should be in UTC timezone
 	for i, result := range results {
 		if result.Location() != time.UTC {
-			t.Errorf("ParseTargetDate(%q) returned non-UTC timezone: %v", 
+			t.Errorf("ParseTargetDate(%q) returned non-UTC timezone: %v",
 				inputs[i], result.Location())
 		}
 	}

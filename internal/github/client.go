@@ -13,17 +13,17 @@ import (
 )
 
 const (
-	userAgent        = "weekly-report-cli/1.0"
-	maxRetries       = 3
-	baseBackoffMs    = 1000        // 1 second base backoff
-	requestTimeoutSec = 30         // 30 second timeout per request
+	userAgent         = "weekly-report-cli/1.0"
+	maxRetries        = 3
+	baseBackoffMs     = 1000 // 1 second base backoff
+	requestTimeoutSec = 30   // 30 second timeout per request
 )
 
 // New creates a new GitHub client with OAuth2 authentication and retry logic
 func New(ctx context.Context, token string) *github.Client {
 	// Create OAuth2 token source
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	
+
 	// Create HTTP client with OAuth2 transport, retry logic, and timeout
 	httpClient := &http.Client{
 		Timeout: requestTimeoutSec * time.Second,
@@ -50,11 +50,11 @@ type retryTransport struct {
 // RoundTrip implements http.RoundTripper with intelligent retry logic
 func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var lastErr error
-	
+
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		// Clone request for retry attempts
 		reqClone := req.Clone(req.Context())
-		
+
 		// Make the request
 		resp, err := rt.base.RoundTrip(reqClone)
 		if err != nil {
@@ -79,14 +79,14 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				if retryAfter := getRateLimitRetryAfter(resp); retryAfter > 0 {
 					// Close response body to prevent resource leak
 					resp.Body.Close()
-					
+
 					if attempt < maxRetries {
 						time.Sleep(retryAfter)
 						continue
 					}
 				}
 			}
-			
+
 			// Handle other 5xx errors with exponential backoff
 			if resp.StatusCode >= 500 {
 				resp.Body.Close()
@@ -112,16 +112,16 @@ func shouldRetry(resp *http.Response) bool {
 	if resp.StatusCode >= 500 {
 		return true
 	}
-	
+
 	// Retry on 403 rate limit errors (check for rate limit headers)
 	if resp.StatusCode == http.StatusForbidden {
 		// Check if this is a rate limit error by looking for rate limit headers
-		if resp.Header.Get("X-RateLimit-Remaining") != "" || 
-		   resp.Header.Get("Retry-After") != "" {
+		if resp.Header.Get("X-RateLimit-Remaining") != "" ||
+			resp.Header.Get("Retry-After") != "" {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -133,7 +133,7 @@ func getRateLimitRetryAfter(resp *http.Response) time.Duration {
 			return time.Duration(retryAfterSec) * time.Second
 		}
 	}
-	
+
 	// Check for X-RateLimit-Reset header
 	if resetTimeStr := resp.Header.Get("X-RateLimit-Reset"); resetTimeStr != "" {
 		if resetTime, err := strconv.ParseInt(resetTimeStr, 10, 64); err == nil {
@@ -144,7 +144,7 @@ func getRateLimitRetryAfter(resp *http.Response) time.Duration {
 			}
 		}
 	}
-	
+
 	// Default fallback for rate limits
 	return 60 * time.Second
 }
@@ -159,11 +159,11 @@ func isAuthorizationError(resp *http.Response) bool {
 	// 403 Forbidden without rate limit headers - likely SSO authorization required
 	if resp.StatusCode == http.StatusForbidden {
 		// If this is a rate limit error, it's retryable
-		if resp.Header.Get("X-RateLimit-Remaining") != "" || 
-		   resp.Header.Get("Retry-After") != "" {
+		if resp.Header.Get("X-RateLimit-Remaining") != "" ||
+			resp.Header.Get("Retry-After") != "" {
 			return false // This is a rate limit, not an authorization error
 		}
-		
+
 		// 403 without rate limit headers is likely an authorization issue
 		return true
 	}
@@ -181,12 +181,12 @@ func isAuthorizationError(resp *http.Response) bool {
 func calculateBackoff(attempt int) time.Duration {
 	// Exponential backoff: base * 2^attempt with jitter
 	backoffMs := baseBackoffMs * int(math.Pow(2, float64(attempt)))
-	
+
 	// Add jitter (±25%)
 	jitterMs := backoffMs / 4
 	jitter := time.Duration(jitterMs) * time.Millisecond
 	backoff := time.Duration(backoffMs) * time.Millisecond
-	
+
 	// Return backoff ± jitter
 	return backoff + jitter - (2 * jitter * time.Duration(time.Now().UnixNano()%2))
 }

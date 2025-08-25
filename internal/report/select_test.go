@@ -26,7 +26,7 @@ func TestSelectReports_MultipleReports(t *testing.T) {
 <!-- data key="trending" start -->🟣 done<!-- data end -->
 <!-- data key="update" start -->Final update<!-- data end -->`,
 			CreatedAt: sinceTime.Add(3 * time.Hour), // 2025-08-02 03:00 (newer)
-			Author:    "user2", 
+			Author:    "user2",
 			URL:       "comment-url-2",
 		},
 		{

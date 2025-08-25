@@ -13,12 +13,13 @@ type Status struct {
 
 // Predefined status mappings
 var (
-	OnTrack    = Status{Emoji: ":green_circle:", Caption: "On Track"}
-	AtRisk     = Status{Emoji: ":yellow_circle:", Caption: "At Risk"}
-	OffTrack   = Status{Emoji: ":red_circle:", Caption: "Off Track"}
-	NotStarted = Status{Emoji: ":white_circle:", Caption: "Not Started"}
-	Done       = Status{Emoji: ":purple_circle:", Caption: "Done"}
-	Unknown    = Status{Emoji: ":black_circle:", Caption: "Unknown"}
+	OnTrack     = Status{Emoji: ":green_circle:", Caption: "On Track"}
+	AtRisk      = Status{Emoji: ":yellow_circle:", Caption: "At Risk"}
+	OffTrack    = Status{Emoji: ":red_circle:", Caption: "Off Track"}
+	NotStarted  = Status{Emoji: ":white_circle:", Caption: "Not Started"}
+	NeedsUpdate = Status{Emoji: ":white_circle:", Caption: "Needs Update"}
+	Done        = Status{Emoji: ":purple_circle:", Caption: "Done"}
+	Unknown     = Status{Emoji: ":black_circle:", Caption: "Unknown"}
 )
 
 // Status mapping patterns (case-insensitive)
@@ -31,7 +32,7 @@ var statusMappings = []struct {
 		patterns: []string{"on track", "green", "🟢"},
 		status:   OnTrack,
 	},
-	// Yellow/At Risk patterns  
+	// Yellow/At Risk patterns
 	{
 		patterns: []string{"at risk", "yellow", "🟡"},
 		status:   AtRisk,

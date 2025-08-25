@@ -16,21 +16,22 @@ type Config struct {
 	Verbose     bool
 	Quiet       bool
 	Models      struct {
-		BaseURL string
-		Model   string
-		Enabled bool
+		BaseURL      string
+		Model        string
+		Enabled      bool
+		SystemPrompt string
 	}
 }
 
 // FromEnvAndFlags creates a Config from environment variables and CLI flags
-func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool, quiet bool, inputPath string) (*Config, error) {
+func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool, quiet bool, inputPath string, summaryPrompt string) (*Config, error) {
 	// Load environment variables from .env file if it exists
 	_ = godotenv.Load() // Silently ignore if .env file doesn't exist
 	config := &Config{
 		GitHubToken: os.Getenv("GITHUB_TOKEN"),
 		SinceDays:   sinceDays,
 		Concurrency: concurrency,
-		Notes:       !noNotes, // --no-notes inverts the boolean
+		Notes:       !noNotes,          // --no-notes inverts the boolean
 		Verbose:     verbose && !quiet, // verbose is disabled if quiet is set
 		Quiet:       quiet,
 	}
@@ -53,6 +54,9 @@ func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool,
 
 	// Check if AI summarization is disabled
 	config.Models.Enabled = os.Getenv("DISABLE_SUMMARY") == ""
+
+	// Set custom system prompt if provided
+	config.Models.SystemPrompt = summaryPrompt
 
 	return config, nil
 }

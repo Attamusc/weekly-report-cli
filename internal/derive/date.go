@@ -7,8 +7,8 @@ import (
 
 // Common date layout formats to try when parsing
 var dateLayouts = []string{
-	"2006-01-02",    // YYYY-MM-DD (ISO 8601 date)
-	time.RFC3339,    // RFC3339 format (e.g., 2025-01-15T10:30:00Z)
+	"2006-01-02",                // YYYY-MM-DD (ISO 8601 date)
+	time.RFC3339,                // RFC3339 format (e.g., 2025-01-15T10:30:00Z)
 	"2006-01-02T15:04:05Z07:00", // RFC3339 alternative
 	"2006-01-02 15:04:05",       // Common datetime format
 	"2006-01-02T15:04:05",       // ISO 8601 without timezone
@@ -48,7 +48,7 @@ func RenderTargetDate(t *time.Time) string {
 	if t == nil {
 		return "TBD"
 	}
-	
+
 	// Format as YYYY-MM-DD in UTC
 	return t.UTC().Format("2006-01-02")
 }

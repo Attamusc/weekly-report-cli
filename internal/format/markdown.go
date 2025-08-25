@@ -2,6 +2,7 @@ package format
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -117,3 +118,46 @@ func RenderTableWithTitle(title string, rows []Row) string {
 	return builder.String()
 }
 
+// getSortPriority determines the sorting priority tier for a row
+// Priority 1: Items with target dates (highest priority)
+// Priority 2: Items with updates but no target date
+// Priority 3: Items that need updates or haven't started (lowest priority)
+func getSortPriority(row Row) int {
+	// Priority 1: Has target date
+	if row.TargetDate != nil {
+		return 1
+	}
+
+	// Priority 3: Needs updates or not started (lowest priority among undated items)
+	if row.StatusCaption == "Needs Update" || row.StatusCaption == "Not Started" {
+		return 3
+	}
+
+	// Priority 2: Has updates but no date
+	return 2
+}
+
+// SortRowsByTargetDate sorts a slice of rows by priority and target date
+// Priority 1: Items with target dates (sorted chronologically, earliest first)
+// Priority 2: Items with updates but no target date
+// Priority 3: Items that need updates or haven't started
+func SortRowsByTargetDate(rows []Row) {
+	sort.Slice(rows, func(i, j int) bool {
+		priorityI := getSortPriority(rows[i])
+		priorityJ := getSortPriority(rows[j])
+
+		// Different priorities - lower number = higher priority
+		if priorityI != priorityJ {
+			return priorityI < priorityJ
+		}
+
+		// Same priority - handle based on priority type
+		if priorityI == 1 {
+			// Both have dates - sort chronologically
+			return rows[i].TargetDate.Before(*rows[j].TargetDate)
+		}
+
+		// Priority 2 or 3 with no dates - maintain stable order
+		return false
+	})
+}

@@ -21,12 +21,13 @@ import (
 )
 
 var (
-	sinceDays   int
-	inputPath   string
-	concurrency int
-	noNotes     bool
-	verbose     bool
-	quiet       bool
+	sinceDays     int
+	inputPath     string
+	concurrency   int
+	noNotes       bool
+	verbose       bool
+	quiet         bool
+	summaryPrompt string
 )
 
 var generateCmd = &cobra.Command{
@@ -40,7 +41,7 @@ table with optional AI-powered summarization.`,
 
 func init() {
 	rootCmd.AddCommand(generateCmd)
-	
+
 	// Add flags
 	generateCmd.Flags().IntVar(&sinceDays, "since-days", 7, "Number of days to look back for updates")
 	generateCmd.Flags().StringVar(&inputPath, "input", "", "Input file path (default: stdin)")
@@ -48,13 +49,14 @@ func init() {
 	generateCmd.Flags().BoolVar(&noNotes, "no-notes", false, "Disable notes section in output")
 	generateCmd.Flags().BoolVar(&verbose, "verbose", false, "Enable verbose progress output")
 	generateCmd.Flags().BoolVar(&quiet, "quiet", false, "Suppress all progress output")
+	generateCmd.Flags().StringVar(&summaryPrompt, "summary-prompt", "", "Custom prompt for AI summarization (uses default if empty)")
 }
 
 func runGenerate(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
-	
+
 	// Load configuration
-	cfg, err := config.FromEnvAndFlags(sinceDays, concurrency, noNotes, verbose, quiet, inputPath)
+	cfg, err := config.FromEnvAndFlags(sinceDays, concurrency, noNotes, verbose, quiet, inputPath, summaryPrompt)
 	if err != nil {
 		return fmt.Errorf("configuration error: %w", err)
 	}
@@ -97,7 +99,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	var summarizer ai.Summarizer
 	if cfg.Models.Enabled {
 		logger.Debug("AI summarization enabled", "model", cfg.Models.Model)
-		summarizer = ai.NewGHModelsClient(cfg.Models.BaseURL, cfg.Models.Model, cfg.GitHubToken)
+		summarizer = ai.NewGHModelsClient(cfg.Models.BaseURL, cfg.Models.Model, cfg.GitHubToken, cfg.Models.SystemPrompt)
 	} else {
 		logger.Debug("AI summarization disabled")
 		summarizer = ai.NewNoopSummarizer()
@@ -115,24 +117,24 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	// Progress tracking
 	var completed atomic.Int32
 	var wg sync.WaitGroup
-	
+
 	for _, ref := range issueRefs {
 		wg.Add(1)
 		go func(ref input.IssueRef) {
 			defer wg.Done()
-			semaphore <- struct{}{} // Acquire semaphore
+			semaphore <- struct{}{}        // Acquire semaphore
 			defer func() { <-semaphore }() // Release semaphore
 
 			result := processIssue(ctx, githubClient, summarizer, ref, since, cfg.SinceDays)
-			
+
 			// Update progress
 			current := completed.Add(1)
 			if !cfg.Quiet {
-				logger.Info("Processing issues", 
-					"completed", int(current), 
+				logger.Info("Processing issues",
+					"completed", int(current),
 					"total", len(issueRefs))
 			}
-			
+
 			results <- result
 		}(ref)
 	}
@@ -179,6 +181,9 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "No report rows generated\n")
 		os.Exit(2) // Exit code 2 for no rows produced
 	}
+
+	// Sort rows by target date (earliest first, then TBD)
+	format.SortRowsByTargetDate(rows)
 
 	// Output markdown table
 	logger.Info("Rendering output...", "rows", len(rows))
@@ -234,17 +239,17 @@ type IssueResult struct {
 }
 
 // processIssue handles the complete pipeline for a single GitHub issue
-func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.Summarizer, 
+func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.Summarizer,
 	ref input.IssueRef, since time.Time, sinceDays int) IssueResult {
-	
+
 	// Get logger from context
 	logger, ok := ctx.Value("logger").(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
-	
+
 	logger.Debug("Processing issue", "url", ref.URL)
-	
+
 	// Fetch issue data
 	logger.Debug("Fetching issue data", "issue", ref.String())
 	issueData, err := github.FetchIssue(ctx, client, ref)
@@ -267,13 +272,17 @@ func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.S
 
 	if len(reports) == 0 {
 		logger.Debug("No reports found in time window", "issue", ref.String())
-		// No reports found - add note and return no row
+		// No reports found - create row with NeedsUpdate status and add note
+		status := derive.NeedsUpdate
+		summary := fmt.Sprintf("No update provided in last %d days", sinceDays)
+		row := format.NewRow(status, issueData.Title, ref.URL, nil, summary)
+
 		note := &format.Note{
 			Kind:      format.NoteNoUpdatesInWindow,
 			IssueURL:  ref.URL,
 			SinceDays: sinceDays,
 		}
-		return IssueResult{IssueURL: ref.URL, Note: note}
+		return IssueResult{IssueURL: ref.URL, Row: &row, Note: note}
 	}
 
 	logger.Debug("Found reports", "issue", ref.String(), "count", len(reports))
@@ -291,13 +300,24 @@ func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.S
 
 	if len(updateTexts) == 0 {
 		logger.Debug("No update text found", "issue", ref.String())
-		// Reports exist but no update text - add note and return no row
+		// Reports exist but no update text - create row with NeedsUpdate status and add note
+		status := derive.NeedsUpdate
+		summary := fmt.Sprintf("No structured update found in last %d days", sinceDays)
+
+		// Parse target date from newest report if available
+		var targetDate *time.Time
+		if len(reports) > 0 {
+			targetDate = derive.ParseTargetDate(reports[0].TargetDate)
+		}
+
+		row := format.NewRow(status, issueData.Title, ref.URL, targetDate, summary)
+
 		note := &format.Note{
 			Kind:      format.NoteNoUpdatesInWindow,
 			IssueURL:  ref.URL,
 			SinceDays: sinceDays,
 		}
-		return IssueResult{IssueURL: ref.URL, Note: note}
+		return IssueResult{IssueURL: ref.URL, Row: &row, Note: note}
 	}
 
 	// Generate summary

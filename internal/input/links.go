@@ -36,7 +36,7 @@ func ParseIssueLinks(r io.Reader) ([]IssueRef, error) {
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		
+
 		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -65,7 +65,7 @@ func ParseIssueLinks(r io.Reader) ([]IssueRef, error) {
 
 		// Create canonical URL without query/fragment for deduplication
 		canonicalURL := fmt.Sprintf("https://github.com/%s/%s/issues/%d", owner, repo, number)
-		
+
 		// Skip if we've already seen this issue
 		if seen[canonicalURL] {
 			continue

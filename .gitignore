@@ -49,3 +49,6 @@ weekly-report-cli
 
 # Log files
 *.log
+
+# testing files
+issues.txt

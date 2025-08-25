@@ -142,7 +142,7 @@ func TestParseIssueLinks_EmptyInput(t *testing.T) {
 func TestIssueRef_String(t *testing.T) {
 	ref := IssueRef{
 		Owner:  "owner",
-		Repo:   "repo", 
+		Repo:   "repo",
 		Number: 123,
 		URL:    "https://github.com/owner/repo/issues/123",
 	}
