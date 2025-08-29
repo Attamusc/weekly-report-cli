@@ -13,7 +13,7 @@ import (
 	"github.com/google/go-github/v66/github"
 )
 
-func TestFetchIssue(t *testing.T) {
+func TestFetchIssue_Open(t *testing.T) {
 	// Create test server that simulates GitHub API
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/owner/repo/issues/123" {
@@ -22,10 +22,11 @@ func TestFetchIssue(t *testing.T) {
 			return
 		}
 
-		// Return mock issue data
+		// Return mock open issue data
 		issue := github.Issue{
 			HTMLURL: github.String("https://github.com/owner/repo/issues/123"),
 			Title:   github.String("Test Issue Title"),
+			State:   github.String("open"),
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -59,6 +60,107 @@ func TestFetchIssue(t *testing.T) {
 	}
 	if issueData.Title != "Test Issue Title" {
 		t.Errorf("expected title 'Test Issue Title', got %s", issueData.Title)
+	}
+	if issueData.State != "open" {
+		t.Errorf("expected state 'open', got %s", issueData.State)
+	}
+	if issueData.ClosedAt != nil {
+		t.Errorf("expected ClosedAt to be nil for open issue, got %v", issueData.ClosedAt)
+	}
+	if issueData.CloseReason != "" {
+		t.Errorf("expected CloseReason to be empty for open issue, got %s", issueData.CloseReason)
+	}
+}
+
+func TestFetchIssue_Closed(t *testing.T) {
+	closeTime := time.Date(2025, 8, 15, 12, 30, 0, 0, time.UTC)
+	
+	// Create test server that simulates GitHub API for closed issue
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/issues/456":
+			// Return mock closed issue data
+			issue := github.Issue{
+				HTMLURL:  github.String("https://github.com/owner/repo/issues/456"),
+				Title:    github.String("Closed Test Issue"),
+				State:    github.String("closed"),
+				ClosedAt: &github.Timestamp{Time: closeTime},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(issue)
+
+		case "/repos/owner/repo/issues/456/events":
+			// Mock close event
+			events := []github.IssueEvent{
+				{
+					Event:     github.String("closed"),
+					CreatedAt: &github.Timestamp{Time: closeTime},
+					Actor: &github.User{
+						Login: github.String("testuser"),
+					},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(events)
+
+		case "/repos/owner/repo/issues/456/comments":
+			// Mock closing comment
+			comments := []github.IssueComment{
+				{
+					Body:      github.String("Closing this issue as it's completed."),
+					CreatedAt: &github.Timestamp{Time: closeTime.Add(-30 * time.Second)},
+					User: &github.User{
+						Login: github.String("testuser"),
+					},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(comments)
+
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	// Create GitHub client pointing to test server
+	client := github.NewClient(server.Client())
+	baseURL, _ := url.Parse(server.URL + "/")
+	client.BaseURL = baseURL
+
+	// Test issue reference
+	ref := input.IssueRef{
+		Owner:  "owner",
+		Repo:   "repo",
+		Number: 456,
+		URL:    "https://github.com/owner/repo/issues/456",
+	}
+
+	// Fetch issue
+	ctx := context.Background()
+	issueData, err := FetchIssue(ctx, client, ref)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify results
+	if issueData.URL != "https://github.com/owner/repo/issues/456" {
+		t.Errorf("expected URL https://github.com/owner/repo/issues/456, got %s", issueData.URL)
+	}
+	if issueData.Title != "Closed Test Issue" {
+		t.Errorf("expected title 'Closed Test Issue', got %s", issueData.Title)
+	}
+	if issueData.State != "closed" {
+		t.Errorf("expected state 'closed', got %s", issueData.State)
+	}
+	if issueData.ClosedAt == nil {
+		t.Error("expected ClosedAt to be set for closed issue")
+	} else if !issueData.ClosedAt.Equal(closeTime) {
+		t.Errorf("expected ClosedAt %v, got %v", closeTime, *issueData.ClosedAt)
+	}
+	if issueData.CloseReason != "Closing this issue as it's completed." {
+		t.Errorf("expected CloseReason 'Closing this issue as it's completed.', got %s", issueData.CloseReason)
 	}
 }
 

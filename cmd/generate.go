@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -238,6 +239,24 @@ type IssueResult struct {
 	Err      error
 }
 
+// summarizeWithFallback provides consistent AI summarization with fallback handling
+func summarizeWithFallback(ctx context.Context, summarizer ai.Summarizer, issueTitle, issueURL, updateText string, fallbackText string, logger *slog.Logger) string {
+	// Check if updateText is empty or only whitespace
+	trimmed := strings.TrimSpace(updateText)
+	if trimmed == "" {
+		return fallbackText
+	}
+	
+	summary, err := summarizer.Summarize(ctx, issueTitle, issueURL, updateText)
+	if err != nil {
+		logger.Debug("AI summarization failed for closing comment, using fallback", "error", err)
+		return trimmed // Use trimmed original text as fallback, not the generic fallback
+	}
+	
+	logger.Debug("AI summarization succeeded for closing comment")
+	return summary
+}
+
 // processIssue handles the complete pipeline for a single GitHub issue
 func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.Summarizer,
 	ref input.IssueRef, since time.Time, sinceDays int) IssueResult {
@@ -272,7 +291,30 @@ func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.S
 
 	if len(reports) == 0 {
 		logger.Debug("No reports found in time window", "issue", ref.String())
-		// No reports found - create row with NeedsUpdate status and add note
+		
+		// Check if issue is closed - if so, use Done status with closing information
+		if issueData.State == "closed" {
+			logger.Debug("Issue is closed, using Done status", "issue", ref.String())
+			status := derive.Done
+			
+			// Use AI summarization for closing comment
+			summary := summarizeWithFallback(ctx, summarizer, issueData.Title, ref.URL, issueData.CloseReason, "Issue was closed", logger)
+			
+			// Use close date as target date
+			var targetDate *time.Time
+			if issueData.ClosedAt != nil {
+				targetDate = issueData.ClosedAt
+			}
+			
+			row := format.NewRow(status, issueData.Title, ref.URL, targetDate, summary)
+			return IssueResult{
+				IssueURL: ref.URL,
+				Row:      &row,
+				Note:     nil, // No notes needed for closed issues
+			}
+		}
+		
+		// Issue is open - create row with NeedsUpdate status and add note
 		status := derive.NeedsUpdate
 		summary := fmt.Sprintf("No update provided in last %d days", sinceDays)
 		row := format.NewRow(status, issueData.Title, ref.URL, nil, summary)
@@ -300,7 +342,33 @@ func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.S
 
 	if len(updateTexts) == 0 {
 		logger.Debug("No update text found", "issue", ref.String())
-		// Reports exist but no update text - create row with NeedsUpdate status and add note
+		
+		// Check if issue is closed - if so, use Done status with closing information
+		if issueData.State == "closed" {
+			logger.Debug("Issue is closed but has reports, using Done status", "issue", ref.String())
+			status := derive.Done
+			
+			// Use AI summarization for closing comment
+			summary := summarizeWithFallback(ctx, summarizer, issueData.Title, ref.URL, issueData.CloseReason, "Issue was closed", logger)
+			
+			// Parse target date from newest report if available, otherwise use close date
+			var targetDate *time.Time
+			if len(reports) > 0 {
+				targetDate = derive.ParseTargetDate(reports[0].TargetDate)
+			}
+			if targetDate == nil && issueData.ClosedAt != nil {
+				targetDate = issueData.ClosedAt
+			}
+			
+			row := format.NewRow(status, issueData.Title, ref.URL, targetDate, summary)
+			return IssueResult{
+				IssueURL: ref.URL,
+				Row:      &row,
+				Note:     nil, // No notes needed for closed issues
+			}
+		}
+		
+		// Issue is open - Reports exist but no update text - create row with NeedsUpdate status and add note
 		status := derive.NeedsUpdate
 		summary := fmt.Sprintf("No structured update found in last %d days", sinceDays)
 

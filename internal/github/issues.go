@@ -14,8 +14,11 @@ import (
 
 // IssueData represents GitHub issue metadata
 type IssueData struct {
-	URL   string
-	Title string
+	URL         string
+	Title       string
+	State       string    // "open" or "closed"
+	ClosedAt    *time.Time // When the issue was closed (nil if open)
+	CloseReason string    // Text from the closing comment (empty if no comment or open issue)
 }
 
 // Comment represents a GitHub issue comment
@@ -50,10 +53,65 @@ func FetchIssue(ctx context.Context, client *github.Client, ref input.IssueRef) 
 
 	logger.Debug("Issue metadata fetched successfully", "issue", ref.String(), "title", issue.GetTitle())
 
-	return IssueData{
+	issueData := IssueData{
 		URL:   issue.GetHTMLURL(),
 		Title: issue.GetTitle(),
-	}, nil
+		State: issue.GetState(),
+	}
+
+	// If issue is closed, get additional closing information
+	if issue.GetState() == "closed" {
+		if closedAt := issue.GetClosedAt(); !closedAt.Time.IsZero() {
+			issueData.ClosedAt = &closedAt.Time
+		}
+
+		// Try to get the closing comment by fetching the closing event
+		// The closing comment is typically the last comment made when the issue was closed
+		if events, _, err := client.Issues.ListIssueEvents(ctx, ref.Owner, ref.Repo, ref.Number, &github.ListOptions{
+			Page:    1,
+			PerPage: 100, // Get recent events to find the close event
+		}); err == nil {
+			// Look for the most recent "closed" event
+			for i := len(events) - 1; i >= 0; i-- {
+				event := events[i]
+				if event.GetEvent() == "closed" && event.GetCommitID() == "" {
+					// This is a manual close event, not from a commit
+					// The closing comment would be in a comment made around the same time
+					// For simplicity, we'll use a generic message if no specific comment
+					issueData.CloseReason = "Issue was closed"
+					
+					// Try to find a comment made by the same user around the same time
+					if actor := event.GetActor(); actor != nil {
+						closeTime := event.GetCreatedAt().Time
+						sinceTime := closeTime.Add(-1 * time.Minute)
+						// Look for comments made within 1 minute of the close event
+						if comments, _, commentErr := client.Issues.ListComments(ctx, ref.Owner, ref.Repo, ref.Number, &github.IssueListCommentsOptions{
+							Since: &sinceTime,
+							ListOptions: github.ListOptions{
+								Page:    1,
+								PerPage: 10,
+							},
+						}); commentErr == nil {
+							for _, comment := range comments {
+								commentTime := comment.GetCreatedAt().Time
+								if comment.GetUser().GetLogin() == actor.GetLogin() &&
+									commentTime.After(closeTime.Add(-1*time.Minute)) &&
+									commentTime.Before(closeTime.Add(1*time.Minute)) {
+									if body := strings.TrimSpace(comment.GetBody()); body != "" {
+										issueData.CloseReason = body
+										break
+									}
+								}
+							}
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+
+	return issueData, nil
 }
 
 // FetchCommentsSince retrieves issue comments created since the specified time
