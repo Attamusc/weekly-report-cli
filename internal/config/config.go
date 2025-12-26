@@ -21,10 +21,17 @@ type Config struct {
 		Enabled      bool
 		SystemPrompt string
 	}
+	Project struct {
+		URL         string
+		FieldName   string
+		FieldValues []string
+		IncludePRs  bool
+		MaxItems    int
+	}
 }
 
 // FromEnvAndFlags creates a Config from environment variables and CLI flags
-func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool, quiet bool, inputPath string, summaryPrompt string) (*Config, error) {
+func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool, quiet bool, inputPath string, summaryPrompt string, projectURL string, projectField string, projectFieldValues []string, projectIncludePRs bool, projectMaxItems int) (*Config, error) {
 	// Load environment variables from .env file if it exists
 	_ = godotenv.Load() // Silently ignore if .env file doesn't exist
 	config := &Config{
@@ -57,6 +64,13 @@ func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool,
 
 	// Set custom system prompt if provided
 	config.Models.SystemPrompt = summaryPrompt
+
+	// Set up project configuration
+	config.Project.URL = projectURL
+	config.Project.FieldName = projectField
+	config.Project.FieldValues = projectFieldValues
+	config.Project.IncludePRs = projectIncludePRs
+	config.Project.MaxItems = projectMaxItems
 
 	return config, nil
 }

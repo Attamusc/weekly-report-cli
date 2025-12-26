@@ -16,10 +16,60 @@ import (
 	"github.com/Attamusc/weekly-report-cli/internal/format"
 	"github.com/Attamusc/weekly-report-cli/internal/github"
 	"github.com/Attamusc/weekly-report-cli/internal/input"
+	"github.com/Attamusc/weekly-report-cli/internal/projects"
 	"github.com/Attamusc/weekly-report-cli/internal/report"
 	githubapi "github.com/google/go-github/v66/github"
 	"github.com/spf13/cobra"
 )
+
+// projectClientAdapter adapts the projects.Client to the input.ProjectClient interface
+// This avoids circular dependencies between packages
+type projectClientAdapter struct {
+	token  string
+	logger *slog.Logger
+}
+
+// FetchProjectItems implements input.ProjectClient interface
+func (a *projectClientAdapter) FetchProjectItems(ctx context.Context, configInterface interface{}) ([]input.IssueRef, error) {
+	// Convert the resolver config to project config
+	resolverCfg, ok := configInterface.(input.ResolverConfig)
+	if !ok {
+		return nil, fmt.Errorf("invalid config type for project client")
+	}
+
+	// Parse project URL
+	projectRef, err := projects.ParseProjectURL(resolverCfg.ProjectURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid project URL: %w", err)
+	}
+
+	// Create project config
+	projectCfg := projects.ProjectConfig{
+		Ref: projectRef,
+		FieldFilters: []projects.FieldFilter{
+			{
+				FieldName: resolverCfg.ProjectFieldName,
+				Values:    resolverCfg.ProjectFieldValues,
+			},
+		},
+		IncludePRs: resolverCfg.ProjectIncludePRs,
+		MaxItems:   resolverCfg.ProjectMaxItems,
+	}
+
+	// Create projects client and fetch items
+	client := projects.NewClient(a.token)
+	projectItems, err := client.FetchProjectItems(ctx, projectCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter items and extract issue refs
+	issueRefs := projects.FilterProjectItems(projectItems, projectCfg)
+
+	a.logger.Info("Project items fetched and filtered", "project", projectRef.String(), "items", len(issueRefs))
+
+	return issueRefs, nil
+}
 
 var (
 	sinceDays     int
@@ -29,14 +79,45 @@ var (
 	verbose       bool
 	quiet         bool
 	summaryPrompt string
+
+	// Project board related flags
+	projectURL         string
+	projectField       string
+	projectFieldValues string
+	projectIncludePRs  bool
+	projectMaxItems    int
 )
 
 var generateCmd = &cobra.Command{
 	Use:   "generate",
-	Short: "Generate weekly status report from GitHub issue URLs",
-	Long: `Generate reads GitHub issue URLs from stdin or a file, fetches the issues
-and their comments, extracts structured status reports, and outputs a markdown
-table with optional AI-powered summarization.`,
+	Short: "Generate weekly status report from GitHub issues",
+	Long: `Generate reads GitHub issues from multiple sources and creates a weekly status report.
+
+Input Sources:
+  1. GitHub Project Board: Use --project flag with field-based filtering
+  2. URL List: Provide issue URLs via stdin or --input file
+  3. Mixed: Combine both project board and URL list
+
+The tool fetches issues, extracts structured status reports from comments,
+and outputs a markdown table with optional AI-powered summarization.
+
+Examples:
+  # From project board (using defaults: Status field, "In Progress,Done,Blocked")
+  weekly-report-cli generate --project "org:my-org/5"
+
+  # From project board with custom field/values
+  weekly-report-cli generate \
+    --project "org:my-org/5" \
+    --project-field "Priority" \
+    --project-field-values "High,Critical"
+
+  # From URL list (stdin)
+  cat issues.txt | weekly-report-cli generate --since-days 7
+
+  # Mixed sources
+  weekly-report-cli generate \
+    --project "org:my-org/5" \
+    --input additional-issues.txt`,
 	RunE: runGenerate,
 }
 
@@ -51,13 +132,26 @@ func init() {
 	generateCmd.Flags().BoolVar(&verbose, "verbose", false, "Enable verbose progress output")
 	generateCmd.Flags().BoolVar(&quiet, "quiet", false, "Suppress all progress output")
 	generateCmd.Flags().StringVar(&summaryPrompt, "summary-prompt", "", "Custom prompt for AI summarization (uses default if empty)")
+
+	// Project board flags
+	generateCmd.Flags().StringVar(&projectURL, "project", "", "GitHub project board URL or identifier (e.g., 'https://github.com/orgs/my-org/projects/5' or 'org:my-org/5')")
+	generateCmd.Flags().StringVar(&projectField, "project-field", "Status", "Field name to filter by (default: 'Status')")
+	generateCmd.Flags().StringVar(&projectFieldValues, "project-field-values", "In Progress,Done,Blocked", "Comma-separated values to match (default: 'In Progress,Done,Blocked')")
+	generateCmd.Flags().BoolVar(&projectIncludePRs, "project-include-prs", false, "Include pull requests from project board (default: issues only)")
+	generateCmd.Flags().IntVar(&projectMaxItems, "project-max-items", 100, "Maximum number of items to fetch from project board")
 }
 
 func runGenerate(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
+	// Parse project field values
+	var projectFieldValuesList []string
+	if projectFieldValues != "" {
+		projectFieldValuesList = input.ParseFieldValues(projectFieldValues)
+	}
+
 	// Load configuration
-	cfg, err := config.FromEnvAndFlags(sinceDays, concurrency, noNotes, verbose, quiet, inputPath, summaryPrompt)
+	cfg, err := config.FromEnvAndFlags(sinceDays, concurrency, noNotes, verbose, quiet, inputPath, summaryPrompt, projectURL, projectField, projectFieldValuesList, projectIncludePRs, projectMaxItems)
 	if err != nil {
 		return fmt.Errorf("configuration error: %w", err)
 	}
@@ -66,23 +160,31 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	logger := setupLogger(cfg)
 	ctx = context.WithValue(ctx, "logger", logger)
 
-	// Determine input source
-	var inputReader *os.File
-	if inputPath == "" {
-		inputReader = os.Stdin
-	} else {
-		inputReader, err = os.Open(inputPath)
-		if err != nil {
-			return fmt.Errorf("failed to open input file: %w", err)
+	// Initialize project client if needed
+	var projectClient *projectClientAdapter
+	if cfg.Project.URL != "" {
+		logger.Debug("Initializing project client")
+		projectClient = &projectClientAdapter{
+			token:  cfg.GitHubToken,
+			logger: logger,
 		}
-		defer inputReader.Close()
 	}
 
-	// Parse GitHub issue URLs
-	logger.Info("Parsing GitHub URLs...")
-	issueRefs, err := input.ParseIssueLinks(inputReader)
+	// Resolve issue references from all sources (project board and/or URL list)
+	logger.Info("Resolving issue references...")
+	resolverCfg := input.ResolverConfig{
+		ProjectURL:         cfg.Project.URL,
+		ProjectFieldName:   cfg.Project.FieldName,
+		ProjectFieldValues: cfg.Project.FieldValues,
+		ProjectIncludePRs:  cfg.Project.IncludePRs,
+		ProjectMaxItems:    cfg.Project.MaxItems,
+		URLListPath:        inputPath,
+		UseStdin:           inputPath == "" && cfg.Project.URL == "",
+	}
+
+	issueRefs, err := input.ResolveIssueRefs(ctx, resolverCfg, projectClient)
 	if err != nil {
-		return fmt.Errorf("failed to parse issue links: %w", err)
+		return fmt.Errorf("failed to resolve issue references: %w", err)
 	}
 
 	if len(issueRefs) == 0 {
@@ -246,13 +348,13 @@ func summarizeWithFallback(ctx context.Context, summarizer ai.Summarizer, issueT
 	if trimmed == "" {
 		return fallbackText
 	}
-	
+
 	summary, err := summarizer.Summarize(ctx, issueTitle, issueURL, updateText)
 	if err != nil {
 		logger.Debug("AI summarization failed for closing comment, using fallback", "error", err)
 		return trimmed // Use trimmed original text as fallback, not the generic fallback
 	}
-	
+
 	logger.Debug("AI summarization succeeded for closing comment")
 	return summary
 }
@@ -291,21 +393,21 @@ func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.S
 
 	if len(reports) == 0 {
 		logger.Debug("No reports found in time window", "issue", ref.String())
-		
+
 		// Check if issue is closed - if so, use Done status with closing information
 		if issueData.State == "closed" {
 			logger.Debug("Issue is closed, using Done status", "issue", ref.String())
 			status := derive.Done
-			
+
 			// Use AI summarization for closing comment
 			summary := summarizeWithFallback(ctx, summarizer, issueData.Title, ref.URL, issueData.CloseReason, "Issue was closed", logger)
-			
+
 			// Use close date as target date
 			var targetDate *time.Time
 			if issueData.ClosedAt != nil {
 				targetDate = issueData.ClosedAt
 			}
-			
+
 			row := format.NewRow(status, issueData.Title, ref.URL, targetDate, summary)
 			return IssueResult{
 				IssueURL: ref.URL,
@@ -313,7 +415,7 @@ func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.S
 				Note:     nil, // No notes needed for closed issues
 			}
 		}
-		
+
 		// Issue is open - create row with NeedsUpdate status and add note
 		status := derive.NeedsUpdate
 		summary := fmt.Sprintf("No update provided in last %d days", sinceDays)
@@ -342,15 +444,15 @@ func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.S
 
 	if len(updateTexts) == 0 {
 		logger.Debug("No update text found", "issue", ref.String())
-		
+
 		// Check if issue is closed - if so, use Done status with closing information
 		if issueData.State == "closed" {
 			logger.Debug("Issue is closed but has reports, using Done status", "issue", ref.String())
 			status := derive.Done
-			
+
 			// Use AI summarization for closing comment
 			summary := summarizeWithFallback(ctx, summarizer, issueData.Title, ref.URL, issueData.CloseReason, "Issue was closed", logger)
-			
+
 			// Parse target date from newest report if available, otherwise use close date
 			var targetDate *time.Time
 			if len(reports) > 0 {
@@ -359,7 +461,7 @@ func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.S
 			if targetDate == nil && issueData.ClosedAt != nil {
 				targetDate = issueData.ClosedAt
 			}
-			
+
 			row := format.NewRow(status, issueData.Title, ref.URL, targetDate, summary)
 			return IssueResult{
 				IssueURL: ref.URL,
@@ -367,7 +469,7 @@ func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.S
 				Note:     nil, // No notes needed for closed issues
 			}
 		}
-		
+
 		// Issue is open - Reports exist but no update text - create row with NeedsUpdate status and add note
 		status := derive.NeedsUpdate
 		summary := fmt.Sprintf("No structured update found in last %d days", sinceDays)

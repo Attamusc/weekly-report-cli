@@ -10,7 +10,7 @@ This is a Go CLI tool called `weekly-report-cli` that generates weekly status re
 
 ### Core Pipeline
 The application follows a 4-phase pipeline architecture:
-1. **CLI & Input Processing** - Parse GitHub issue URLs from stdin/file
+1. **CLI & Input Processing** - Resolve GitHub issues from URL lists, project boards, or mixed mode
 2. **GitHub Data Fetching** - Fetch issues and comments with retry logic  
 3. **Report Extraction & Selection** - Parse structured data from comments
 4. **Summarization & Rendering** - Generate markdown output with optional AI summaries
@@ -23,7 +23,8 @@ The application follows a 4-phase pipeline architecture:
 
 **Core Modules:**
 - `internal/config/` - Configuration management (env vars + CLI flags)
-- `internal/input/` - GitHub URL parsing and validation
+- `internal/input/` - GitHub URL parsing, validation, and unified input resolution
+- `internal/projects/` - GitHub Projects V2 integration with GraphQL client and filtering
 - `internal/github/` - GitHub API client with OAuth2 and retry logic
 - `internal/report/` - Report extraction from HTML comments and selection logic
 - `internal/ai/` - AI summarization interface with GitHub Models implementation
@@ -32,13 +33,42 @@ The application follows a 4-phase pipeline architecture:
 
 ### Data Flow
 
-1. Parse GitHub issue URLs from input
-2. Fetch issue metadata and comments since specified window
-3. Extract reports using HTML comment markers: `<!-- data key="isReport" value="true" -->`
-4. Select reports within time window (newest-first)
-5. Summarize updates using AI (optional)
-6. Map trending status to canonical emoji/caption format
-7. Render markdown table with status, epic info, target date, and summary
+1. **Input Resolution** - Resolve issue references from one of three modes:
+   - URL List Mode: Parse GitHub issue URLs from stdin/file
+   - Project Board Mode: Fetch issues from GitHub Projects V2 via GraphQL with field filtering
+   - Mixed Mode: Combine project board results with manual URL list
+2. **Deduplication** - Remove duplicate issue references across all sources
+3. **GitHub Fetching** - Fetch issue metadata and comments since specified window
+4. **Report Extraction** - Extract reports using HTML comment markers: `<!-- data key="isReport" value="true" -->`
+5. **Report Selection** - Select reports within time window (newest-first)
+6. **AI Summarization** - Summarize updates using AI (optional)
+7. **Status Mapping** - Map trending status to canonical emoji/caption format
+8. **Rendering** - Render markdown table with status, epic info, target date, and summary
+
+### Input Resolution Architecture
+
+```
+CLI Input (--project or --input/stdin)
+    ↓
+input.ResolveIssueRefs (auto-detects mode)
+    ↓
+┌─────────────────────────────────────┐
+│ Unknown → detect from CLI flags     │
+│ URLList → parse from stdin/file     │
+│ Project → fetch via GraphQL         │
+│ Mixed → combine both sources         │
+└─────────────────────────────────────┘
+    ↓
+If Project Mode:
+    projectClientAdapter → projects.Client → GitHub GraphQL API
+    → projects.FetchProjectItems (paginated)
+    → projects.FilterProjectItems (field-based filtering)
+    → []IssueRef
+    ↓
+Deduplicate & merge with URL list (if mixed mode)
+    ↓
+Existing pipeline (unchanged)
+```
 
 ## Development Commands
 
@@ -122,7 +152,9 @@ go build -o weekly-report-cli .
 ## Configuration
 
 ### Required Environment Variables
-- `GITHUB_TOKEN` - Personal Access Token for private repos and GitHub Models API
+- `GITHUB_TOKEN` - Personal Access Token with scopes:
+  - `repo` - For private repository access
+  - `read:project` - For GitHub Projects V2 board access (required for project board integration)
 
 ### Optional Environment Variables  
 - `GITHUB_MODELS_BASE_URL` - Default: `https://models.github.ai`
@@ -131,12 +163,30 @@ go build -o weekly-report-cli .
 
 ### CLI Usage
 ```bash
-# Basic usage with stdin
+# URL List Mode (traditional)
 cat links.txt | weekly-report-cli generate --since-days 7
-
-# With file input
 weekly-report-cli generate --input links.txt --since-days 14 --no-notes
+
+# Project Board Mode (NEW) - simple with defaults
+weekly-report-cli generate --project "org:my-org/5"
+
+# Project Board Mode - custom field/values
+weekly-report-cli generate \
+  --project "org:my-org/5" \
+  --project-field "Priority" \
+  --project-field-values "High,Critical" \
+  --since-days 7
+
+# Mixed Mode (NEW)
+weekly-report-cli generate \
+  --project "org:my-org/5" \
+  --input critical-issues.txt \
+  --since-days 7
 ```
+
+**Project Board Defaults:**
+- Field: "Status"
+- Values: "In Progress,Done,Blocked"
 
 ## Key Implementation Details
 

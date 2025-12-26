@@ -72,20 +72,23 @@ CGO_ENABLED=0 go build -ldflags="-s -w" -o weekly-report-cli .
 2. Generate a new token with the following scopes:
    - `repo` (for private repositories)
    - `public_repo` (for public repositories)
+   - `read:project` (for GitHub Projects V2 board access) **← NEW: Required for project board integration**
 3. Set the token as an environment variable:
    ```bash
    export GITHUB_TOKEN=your_token_here
    ```
+
+> **Note**: The `read:project` scope is only required if you plan to use the GitHub Projects board integration feature. It is not needed for the traditional URL list input mode.
 
 ## Usage
 
 ### Command Line Interface
 
 ```bash
-# Basic usage with stdin
+# Basic usage with stdin (URL list mode)
 cat links.txt | weekly-report-cli generate --since-days 7
 
-# With file input
+# With file input (URL list mode)
 weekly-report-cli generate --input links.txt --since-days 14
 
 # Disable AI summarization and notes
@@ -93,16 +96,84 @@ weekly-report-cli generate --input links.txt --no-notes
 
 # Custom concurrency
 weekly-report-cli generate --input links.txt --concurrency 8
+
+# GitHub Projects board integration (NEW) - uses defaults
+weekly-report-cli generate --project "org:my-org/5"
+
+# With custom field and values
+weekly-report-cli generate \
+  --project "org:my-org/5" \
+  --project-field "Priority" \
+  --project-field-values "High,Critical" \
+  --since-days 7
+
+# Mixed mode: Combine project board + URL list
+weekly-report-cli generate \
+  --project "org:my-org/5" \
+  --input critical-issues.txt \
+  --since-days 14
 ```
 
-### Input Format
+### Input Modes
 
-The tool accepts GitHub issue URLs, one per line:
+The tool supports three input modes:
+
+#### 1. URL List Mode (Traditional)
+Provide GitHub issue URLs directly, one per line:
 ```
 https://github.com/owner/repo/issues/123
 https://github.com/owner/repo/issues/456
 https://github.com/another-owner/another-repo/issues/789
 ```
+
+#### 2. GitHub Projects Board Mode (NEW)
+Fetch issues automatically from a GitHub Projects V2 board using field-based filtering:
+
+```bash
+# Simple usage with defaults (Status field: "In Progress,Done,Blocked")
+weekly-report-cli generate --project "org:my-org/5"
+
+# Custom field and values
+weekly-report-cli generate \
+  --project "org:my-org/5" \
+  --project-field "Priority" \
+  --project-field-values "High,Critical" \
+  --since-days 7
+```
+
+**Project URL Formats:**
+- Full URL: `https://github.com/orgs/my-org/projects/5`
+- Full URL (user): `https://github.com/users/username/projects/3`
+- Short form: `org:my-org/5`
+- Short form (user): `user:username/3`
+
+**Filtering Options:**
+- `--project-field`: The project field to filter on (default: "Status")
+- `--project-field-values`: Comma-separated list of values to match (default: "In Progress,Done,Blocked")
+- `--project-include-prs`: Include pull requests (default: issues only)
+- `--project-max-items`: Maximum items to fetch (default: 100)
+
+**Filter Behavior:**
+- Multiple values within `--project-field-values` use **OR logic** (matches any value)
+- Multiple `--project-field` flags use **AND logic** (matches all filters)
+- Text fields use case-insensitive substring matching
+- Single-select fields use exact matching
+- Draft issues are always excluded
+
+#### 3. Mixed Mode
+Combine both project board filtering and manual URL lists:
+
+```bash
+# Use defaults for project board, add manual issues
+weekly-report-cli generate \
+  --project "org:my-org/5" \
+  --input additional-issues.txt \
+  --since-days 7
+```
+
+Issues are automatically deduplicated across both sources.
+
+> **See also**: [docs/PROJECT_BOARDS.md](docs/PROJECT_BOARDS.md) for detailed project board usage guide.
 
 ### Report Data Format
 
@@ -177,10 +248,19 @@ The application follows a 4-phase pipeline architecture:
 │   │   ├── client.go      # OAuth2 client setup
 │   │   └── issues.go      # Issue and comment fetching
 │   ├── input/             # Input processing
-│   │   └── links.go       # URL parsing and validation
+│   │   ├── links.go       # URL parsing and validation
+│   │   └── resolver.go    # Unified input resolution (URL list + projects)
+│   ├── projects/          # GitHub Projects V2 integration (NEW)
+│   │   ├── types.go       # Data structures for projects
+│   │   ├── parser.go      # Project URL parsing
+│   │   ├── query.go       # GraphQL query templates
+│   │   ├── client.go      # GraphQL client with pagination
+│   │   └── filter.go      # Field-based filtering logic
 │   └── report/            # Report extraction and processing
 │       ├── extract.go     # HTML comment parsing
 │       └── select.go      # Time window filtering
+├── docs/                  # Documentation
+│   └── PROJECT_BOARDS.md  # Project board usage guide (NEW)
 ├── go.mod                 # Go module definition
 ├── go.sum                 # Dependency checksums
 └── main.go               # Application entry point
@@ -189,6 +269,8 @@ The application follows a 4-phase pipeline architecture:
 ### Key Components
 
 - **GitHub Client**: OAuth2-authenticated client with retry logic for rate limits
+- **Projects Client**: GraphQL client for GitHub Projects V2 API with cursor-based pagination
+- **Input Resolver**: Unified input resolution supporting URL lists, project boards, and mixed mode
 - **Report Extractor**: Parses structured data from HTML comments using regex
 - **Status Mapper**: Normalizes various status formats to standard emoji representations
 - **AI Summarizer**: Interface-based design supporting multiple AI providers
@@ -337,6 +419,21 @@ Error: GitHub API authentication failed
 ```
 - Verify your `GITHUB_TOKEN` is set correctly
 - Check that the token has appropriate repository access permissions
+- If using project boards, ensure the token has the `read:project` scope
+
+**Project Board Errors**
+```bash
+Error: failed to fetch project: 401 Unauthorized - Check token has 'read:project' scope
+```
+- Your GitHub token is missing the `read:project` scope
+- Regenerate your token with the required scope and update the `GITHUB_TOKEN` environment variable
+
+```bash
+Error: failed to fetch project: 404 Not Found - Project may not exist or token lacks access
+```
+- Verify the project URL/reference is correct
+- Ensure your token has access to the organization or user's projects
+- Check that the project number is correct
 
 **No Reports Found**
 ```bash
