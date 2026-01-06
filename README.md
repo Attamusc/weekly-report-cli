@@ -5,10 +5,11 @@ A Go CLI tool that generates weekly status reports by parsing structured data fr
 ## Features
 
 - **GitHub Integration**: Fetches issues and comments using OAuth2 authentication
+- **GitHub Projects V2**: Direct integration with project boards and views via GraphQL
 - **Structured Data Parsing**: Extracts reports from HTML comment markers in GitHub issues
-- **AI Summarization**: Optional AI-powered summaries using GitHub Models API
-- **Flexible Input**: Accepts GitHub issue URLs from stdin or file input
-- **Concurrent Processing**: Parallel API requests with configurable worker pools
+- **Batch AI Summarization**: Single-request AI summarization for all updates (avoids rate limits)
+- **Flexible Input**: Accepts GitHub issue URLs from stdin, files, or project boards
+- **Concurrent Processing**: Parallel data fetching with configurable worker pools
 - **Status Mapping**: Maps various status indicators to standardized emoji format
 - **Markdown Output**: Generates clean markdown tables with status, epic info, and summaries
 

@@ -9,11 +9,12 @@ This is a Go CLI tool called `weekly-report-cli` that generates weekly status re
 ## Architecture
 
 ### Core Pipeline
-The application follows a 4-phase pipeline architecture:
-1. **CLI & Input Processing** - Resolve GitHub issues from URL lists, project boards, or mixed mode
-2. **GitHub Data Fetching** - Fetch issues and comments with retry logic  
-3. **Report Extraction & Selection** - Parse structured data from comments
-4. **Summarization & Rendering** - Generate markdown output with optional AI summaries
+The application follows a 3-phase pipeline architecture:
+1. **Phase A: Data Collection (Parallel)** - Resolve issues, fetch GitHub data, and extract reports without AI
+2. **Phase B: Batch Summarization (Single API Call)** - Summarize all updates in one batched request
+3. **Phase C: Result Assembly** - Match summaries to issues and render markdown output
+
+This batched approach minimizes AI API calls (N issues → 1 API call), avoiding rate limits and dramatically improving performance.
 
 ### Key Components
 
@@ -33,17 +34,27 @@ The application follows a 4-phase pipeline architecture:
 
 ### Data Flow
 
+**Phase A: Data Collection (Parallel)**
 1. **Input Resolution** - Resolve issue references from one of three modes:
    - URL List Mode: Parse GitHub issue URLs from stdin/file
    - Project Board Mode: Fetch issues from GitHub Projects V2 via GraphQL with field filtering
    - Mixed Mode: Combine project board results with manual URL list
 2. **Deduplication** - Remove duplicate issue references across all sources
-3. **GitHub Fetching** - Fetch issue metadata and comments since specified window
+3. **GitHub Fetching** - Fetch issue metadata and comments since specified window (parallel workers)
 4. **Report Extraction** - Extract reports using HTML comment markers: `<!-- data key="isReport" value="true" -->`
 5. **Report Selection** - Select reports within time window (newest-first)
-6. **AI Summarization** - Summarize updates using AI (optional)
-7. **Status Mapping** - Map trending status to canonical emoji/caption format
-8. **Rendering** - Render markdown table with status, epic info, target date, and summary
+6. **Status & Date Mapping** - Map trending status and parse target dates
+
+**Phase B: Batch Summarization (Single Request)**
+7. **Batch AI Summarization** - Collect all update texts and send ONE batched API request to GitHub Models
+   - Supports up to 25 items per batch (chunked if larger)
+   - JSON response format with URL-to-summary mapping
+   - Markdown fallback parsing if JSON fails
+   - Falls back to raw text if API fails
+
+**Phase C: Result Assembly**
+8. **Summary Application** - Match AI summaries to issues by URL
+9. **Rendering** - Render markdown table with status, epic info, target date, and summary
 
 ### Input Resolution Architecture
 

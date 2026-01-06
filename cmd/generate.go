@@ -239,9 +239,9 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	since := time.Now().AddDate(0, 0, -cfg.SinceDays)
 	logger.Debug("Looking for updates since", "since", since.Format("2006-01-02"))
 
-	// Process issues concurrently
-	logger.Info("Fetching GitHub data...", "concurrency", cfg.Concurrency)
-	results := make(chan IssueResult, len(issueRefs))
+	// ========== PHASE A: Collect all issue data (parallel) ==========
+	logger.Info("Collecting issue data...", "concurrency", cfg.Concurrency)
+	dataResults := make(chan IssueDataResult, len(issueRefs))
 	semaphore := make(chan struct{}, cfg.Concurrency)
 
 	// Progress tracking
@@ -255,40 +255,72 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 			semaphore <- struct{}{}        // Acquire semaphore
 			defer func() { <-semaphore }() // Release semaphore
 
-			result := processIssue(ctx, githubClient, summarizer, ref, since, cfg.SinceDays)
+			data, err := collectIssueData(ctx, githubClient, ref, since, cfg.SinceDays)
 
 			// Update progress
 			current := completed.Add(1)
 			if !cfg.Quiet {
-				logger.Info("Processing issues",
+				logger.Info("Collecting issue data",
 					"completed", int(current),
 					"total", len(issueRefs))
 			}
 
-			results <- result
+			dataResults <- IssueDataResult{Data: data, Err: err}
 		}(ref)
 	}
 
 	// Close results channel when all goroutines finish
 	go func() {
 		wg.Wait()
-		close(results)
+		close(dataResults)
 	}()
 
-	// Collect results
-	logger.Info("Collecting results...")
-	var rows []format.Row
-	var notes []format.Note
+	// Collect all data
+	var allData []IssueData
 	var errorCount int
 
-	for result := range results {
+	for result := range dataResults {
 		if result.Err != nil {
 			errorCount++
-			fmt.Fprintf(os.Stderr, "Error processing %s: %v\n", result.IssueURL, result.Err)
-			logger.Debug("Error processing issue", "url", result.IssueURL, "error", result.Err)
+			fmt.Fprintf(os.Stderr, "Error collecting data for issue: %v\n", result.Err)
+			logger.Debug("Error collecting issue data", "error", result.Err)
 			continue
 		}
+		allData = append(allData, result.Data)
+	}
 
+	if errorCount > 0 {
+		logger.Info("Data collection completed with errors", "errors", errorCount, "successful", len(allData))
+	} else {
+		logger.Info("Data collection completed successfully", "issues", len(allData))
+	}
+
+	// ========== PHASE B: Batch summarization (single API call) ==========
+	var summaries map[string]string
+	if cfg.Models.Enabled {
+		var err error
+		summaries, err = batchSummarize(ctx, summarizer, allData, logger)
+		if err != nil {
+			logger.Warn("Batch summarization failed, using fallbacks", "error", err)
+			summaries = make(map[string]string) // Empty map triggers fallback
+		}
+	} else {
+		logger.Debug("AI summarization disabled, using fallbacks")
+		summaries = make(map[string]string)
+	}
+
+	// ========== PHASE C: Create final results ==========
+	logger.Info("Creating final results...")
+	var rows []format.Row
+	var notes []format.Note
+
+	for _, data := range allData {
+		summary := summaries[data.IssueURL]
+		if summary == "" {
+			summary = data.FallbackSummary
+		}
+
+		result := createResultFromData(data, summary)
 		if result.Row != nil {
 			rows = append(rows, *result.Row)
 			logger.Debug("Added report row", "issue", result.IssueURL)
@@ -300,11 +332,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if errorCount > 0 {
-		logger.Info("Processing completed with errors", "errors", errorCount, "successful", len(issueRefs)-errorCount)
-	} else {
-		logger.Info("Processing completed successfully")
-	}
+	logger.Info("Results created successfully", "rows", len(rows), "notes", len(notes))
 
 	// Generate output
 	if len(rows) == 0 {
@@ -366,6 +394,188 @@ type IssueResult struct {
 	Row      *format.Row
 	Note     *format.Note
 	Err      error
+}
+
+// IssueData represents collected data from an issue before AI summarization
+type IssueData struct {
+	IssueURL        string
+	IssueTitle      string
+	IssueState      string
+	ClosedAt        *time.Time
+	CloseReason     string
+	Reports         []report.Report
+	UpdateTexts     []string // Raw updates (newest first)
+	Status          derive.Status
+	TargetDate      *time.Time
+	ShouldSummarize bool         // Whether this needs AI summarization
+	FallbackSummary string       // Used if AI fails or not needed
+	Note            *format.Note // Note to include in output
+}
+
+// IssueDataResult represents the result of collecting issue data
+type IssueDataResult struct {
+	Data IssueData
+	Err  error
+}
+
+// createResultFromData creates an IssueResult from collected data and AI summary
+func createResultFromData(data IssueData, summary string) IssueResult {
+	// Use AI summary if available, otherwise use fallback
+	if summary == "" {
+		summary = data.FallbackSummary
+	}
+
+	// Create table row
+	row := format.NewRow(data.Status, data.IssueTitle, data.IssueURL, data.TargetDate, summary)
+
+	return IssueResult{
+		IssueURL: data.IssueURL,
+		Row:      &row,
+		Note:     data.Note,
+		Err:      nil,
+	}
+}
+
+// batchSummarize summarizes all collected issue data in a single API call
+func batchSummarize(ctx context.Context, summarizer ai.Summarizer, allData []IssueData, logger *slog.Logger) (map[string]string, error) {
+	// Collect items that need summarization
+	var batchItems []ai.BatchItem
+	for _, data := range allData {
+		if data.ShouldSummarize && len(data.UpdateTexts) > 0 {
+			batchItems = append(batchItems, ai.BatchItem{
+				IssueURL:    data.IssueURL,
+				IssueTitle:  data.IssueTitle,
+				UpdateTexts: data.UpdateTexts,
+			})
+		}
+	}
+
+	if len(batchItems) == 0 {
+		logger.Debug("No items need summarization")
+		return map[string]string{}, nil
+	}
+
+	logger.Info("Batch summarizing updates", "count", len(batchItems))
+	summaries, err := summarizer.SummarizeBatch(ctx, batchItems)
+	if err != nil {
+		logger.Warn("Batch summarization failed", "error", err)
+		return map[string]string{}, err
+	}
+
+	logger.Info("Batch summarization completed", "summaries", len(summaries))
+	return summaries, nil
+}
+
+// collectIssueData fetches GitHub data and extracts reports without AI summarization
+func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.IssueRef, since time.Time, sinceDays int) (IssueData, error) {
+	// Get logger from context
+	logger, ok := ctx.Value("logger").(*slog.Logger)
+	if !ok {
+		logger = slog.Default()
+	}
+
+	logger.Debug("Collecting issue data", "url", ref.URL)
+
+	// Fetch issue data
+	issueData, err := github.FetchIssue(ctx, client, ref)
+	if err != nil {
+		return IssueData{}, fmt.Errorf("failed to fetch issue: %w", err)
+	}
+
+	// Fetch comments since the time window
+	comments, err := github.FetchCommentsSince(ctx, client, ref, since)
+	if err != nil {
+		return IssueData{}, fmt.Errorf("failed to fetch comments: %w", err)
+	}
+
+	// Select reports within the time window
+	reports := report.SelectReports(comments, since)
+
+	result := IssueData{
+		IssueURL:    ref.URL,
+		IssueTitle:  issueData.Title,
+		IssueState:  issueData.State,
+		ClosedAt:    issueData.ClosedAt,
+		CloseReason: issueData.CloseReason,
+		Reports:     reports,
+	}
+
+	// Case 1: No reports found
+	if len(reports) == 0 {
+		if issueData.State == "closed" {
+			// Issue is closed - use Done status
+			result.Status = derive.Done
+			result.TargetDate = issueData.ClosedAt
+			result.ShouldSummarize = true
+			result.UpdateTexts = []string{issueData.CloseReason}
+			result.FallbackSummary = "Issue was closed"
+		} else {
+			// Issue is open - needs update
+			result.Status = derive.NeedsUpdate
+			result.ShouldSummarize = false
+			result.FallbackSummary = fmt.Sprintf("No update provided in last %d days", sinceDays)
+			result.Note = &format.Note{
+				Kind:      format.NoteNoUpdatesInWindow,
+				IssueURL:  ref.URL,
+				SinceDays: sinceDays,
+			}
+		}
+		return result, nil
+	}
+
+	// Case 2: Reports exist - collect update texts
+	var updateTexts []string
+	for _, rep := range reports {
+		if rep.UpdateRaw != "" {
+			updateTexts = append(updateTexts, rep.UpdateRaw)
+		}
+	}
+	result.UpdateTexts = updateTexts
+
+	// Use newest report for status and target date
+	newestReport := reports[0]
+	result.Status = derive.MapTrending(newestReport.TrendingRaw)
+	result.TargetDate = derive.ParseTargetDate(newestReport.TargetDate)
+
+	// Case 2a: Reports exist but no update text
+	if len(updateTexts) == 0 {
+		if issueData.State == "closed" {
+			// Issue is closed - use Done status
+			result.Status = derive.Done
+			if result.TargetDate == nil {
+				result.TargetDate = issueData.ClosedAt
+			}
+			result.ShouldSummarize = true
+			result.UpdateTexts = []string{issueData.CloseReason}
+			result.FallbackSummary = "Issue was closed"
+		} else {
+			// Issue is open - needs update
+			result.Status = derive.NeedsUpdate
+			result.ShouldSummarize = false
+			result.FallbackSummary = fmt.Sprintf("No structured update found in last %d days", sinceDays)
+			result.Note = &format.Note{
+				Kind:      format.NoteNoUpdatesInWindow,
+				IssueURL:  ref.URL,
+				SinceDays: sinceDays,
+			}
+		}
+		return result, nil
+	}
+
+	// Case 2b: Reports with update text - needs summarization
+	result.ShouldSummarize = true
+	result.FallbackSummary = updateTexts[0] // Use newest update as fallback
+
+	// Add note if multiple reports
+	if len(reports) >= 2 {
+		result.Note = &format.Note{
+			Kind:      format.NoteMultipleUpdates,
+			IssueURL:  ref.URL,
+			SinceDays: sinceDays,
+		}
+	}
+
+	return result, nil
 }
 
 // summarizeWithFallback provides consistent AI summarization with fallback handling
