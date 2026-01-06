@@ -47,6 +47,8 @@ type ResolverConfig struct {
 	ProjectFieldValues []string
 	ProjectIncludePRs  bool
 	ProjectMaxItems    int
+	ProjectView        string // View name to filter by
+	ProjectViewID      string // View ID (takes precedence over ProjectView)
 
 	// URL list settings
 	URLListPath string // File path or empty for stdin

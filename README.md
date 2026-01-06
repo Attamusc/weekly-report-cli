@@ -107,6 +107,12 @@ weekly-report-cli generate \
   --project-field-values "High,Critical" \
   --since-days 7
 
+# Using project views (NEW) - reference pre-configured views
+weekly-report-cli generate \
+  --project "org:my-org/5" \
+  --project-view "Blocked Items" \
+  --since-days 7
+
 # Mixed mode: Combine project board + URL list
 weekly-report-cli generate \
   --project "org:my-org/5" \
@@ -159,6 +165,42 @@ weekly-report-cli generate \
 - Text fields use case-insensitive substring matching
 - Single-select fields use exact matching
 - Draft issues are always excluded
+
+**Using Project Views (NEW):**
+
+Instead of manually specifying field filters, you can reference pre-configured GitHub Projects views by name or ID:
+
+```bash
+# Use a view by name
+weekly-report-cli generate \
+  --project "org:my-org/5" \
+  --project-view "Blocked Items" \
+  --since-days 7
+
+# Use a view by ID (recommended for automation)
+weekly-report-cli generate \
+  --project "org:my-org/5" \
+  --project-view-id "PVT_kwDOABCDEF" \
+  --since-days 14
+
+# Combine view with additional filters
+weekly-report-cli generate \
+  --project "org:my-org/5" \
+  --project-view "Current Sprint" \
+  --project-field "Priority" \
+  --project-field-values "High,Critical"
+```
+
+**View Options:**
+- `--project-view`: View name (e.g., "Blocked Items") - case-insensitive matching
+- `--project-view-id`: View global node ID (e.g., "PVT_kwDOABCDEF") - takes precedence over name
+
+**View Benefits:**
+- Simpler commands (reference views instead of typing filters)
+- Single source of truth (filters defined in GitHub UI)
+- Automatic sync (view changes immediately reflected)
+
+> **See also**: [docs/PROJECT_VIEWS.md](docs/PROJECT_VIEWS.md) for detailed view usage guide.
 
 #### 3. Mixed Mode
 Combine both project board filtering and manual URL lists:
@@ -255,12 +297,14 @@ The application follows a 4-phase pipeline architecture:
 │   │   ├── parser.go      # Project URL parsing
 │   │   ├── query.go       # GraphQL query templates
 │   │   ├── client.go      # GraphQL client with pagination
-│   │   └── filter.go      # Field-based filtering logic
+│   │   ├── filter.go      # Field-based filtering logic
+│   │   └── view_filter.go # View filter parsing and merging (NEW)
 │   └── report/            # Report extraction and processing
 │       ├── extract.go     # HTML comment parsing
 │       └── select.go      # Time window filtering
 ├── docs/                  # Documentation
-│   └── PROJECT_BOARDS.md  # Project board usage guide (NEW)
+│   ├── PROJECT_BOARDS.md  # Project board usage guide
+│   └── PROJECT_VIEWS.md   # Project views usage guide (NEW)
 ├── go.mod                 # Go module definition
 ├── go.sum                 # Dependency checksums
 └── main.go               # Application entry point

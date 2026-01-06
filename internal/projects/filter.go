@@ -1,6 +1,7 @@
 package projects
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/Attamusc/weekly-report-cli/internal/input"
@@ -43,9 +44,16 @@ func FilterProjectItems(items []ProjectItem, config ProjectConfig) []input.Issue
 // Uses AND logic between filters (all must match)
 // Uses OR logic within a filter (any value can match)
 func MatchesFilters(item ProjectItem, filters []FieldFilter) bool {
+	matches, _ := MatchesFiltersWithDetails(item, filters)
+	return matches
+}
+
+// MatchesFiltersWithDetails checks if a ProjectItem matches all field filters and returns details
+// Returns (matches bool, failureReason string)
+func MatchesFiltersWithDetails(item ProjectItem, filters []FieldFilter) (bool, string) {
 	// If no filters, everything matches
 	if len(filters) == 0 {
-		return true
+		return true, ""
 	}
 
 	// Check each filter (AND logic)
@@ -54,17 +62,28 @@ func MatchesFilters(item ProjectItem, filters []FieldFilter) bool {
 		fieldValue, exists := item.FieldValues[filter.FieldName]
 		if !exists {
 			// Field doesn't exist on this item, filter fails
-			return false
+			return false, fmt.Sprintf("field '%s' not found (available: %v)", filter.FieldName, getFieldKeys(item.FieldValues))
 		}
 
 		// Check if field value matches any of the filter values (OR logic)
 		if !matchFieldValue(fieldValue, filter.Values) {
-			return false
+			actualValue := fieldValue.String()
+			return false, fmt.Sprintf("field '%s' value '%s' (type: %s) doesn't match any of %v",
+				filter.FieldName, actualValue, fieldValue.Type, filter.Values)
 		}
 	}
 
 	// All filters matched
-	return true
+	return true, ""
+}
+
+// getFieldKeys returns the keys from a FieldValues map
+func getFieldKeys(fieldValues map[string]FieldValue) []string {
+	keys := make([]string, 0, len(fieldValues))
+	for k := range fieldValues {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // matchFieldValue checks if a field value matches any of the filter values

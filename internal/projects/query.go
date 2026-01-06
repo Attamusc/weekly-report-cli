@@ -4,29 +4,14 @@ import "fmt"
 
 // GraphQL query template for fetching project items
 // The %s placeholder will be replaced with either "organization" or "user"
+// The query parameter allows server-side filtering using GitHub's filter syntax
 const projectItemsQueryTemplate = `
-query($owner: String!, $number: Int!, $first: Int!, $cursor: String) {
+query($owner: String!, $number: Int!, $first: Int!, $cursor: String, $query: String) {
   %s(login: $owner) {
     projectV2(number: $number) {
       id
       title
-      fields(first: 20) {
-        nodes {
-          ... on ProjectV2FieldCommon {
-            id
-            name
-          }
-          ... on ProjectV2SingleSelectField {
-            id
-            name
-            options {
-              id
-              name
-            }
-          }
-        }
-      }
-      items(first: $first, after: $cursor) {
+      items(first: $first, after: $cursor, query: $query) {
         nodes {
           id
           type
@@ -58,42 +43,6 @@ query($owner: String!, $number: Int!, $first: Int!, $cursor: String) {
               title
             }
           }
-          fieldValues(first: 20) {
-            nodes {
-              ... on ProjectV2ItemFieldTextValue {
-                text
-                field {
-                  ... on ProjectV2FieldCommon {
-                    name
-                  }
-                }
-              }
-              ... on ProjectV2ItemFieldSingleSelectValue {
-                name
-                field {
-                  ... on ProjectV2FieldCommon {
-                    name
-                  }
-                }
-              }
-              ... on ProjectV2ItemFieldDateValue {
-                date
-                field {
-                  ... on ProjectV2FieldCommon {
-                    name
-                  }
-                }
-              }
-              ... on ProjectV2ItemFieldNumberValue {
-                number
-                field {
-                  ... on ProjectV2FieldCommon {
-                    name
-                  }
-                }
-              }
-            }
-          }
         }
         pageInfo {
           hasNextPage
@@ -117,6 +66,41 @@ func buildProjectQuery(projectType ProjectType) string {
 		ownerType = "organization"
 	}
 	return fmt.Sprintf(projectItemsQueryTemplate, ownerType)
+}
+
+// GraphQL query template for fetching project views
+// The %s placeholder will be replaced with either "organization" or "user"
+const projectViewsQueryTemplate = `
+query($owner: String!, $number: Int!) {
+  %s(login: $owner) {
+    projectV2(number: $number) {
+      id
+      title
+      views(first: 20) {
+        nodes {
+          id
+          name
+          filter
+          layout
+        }
+      }
+    }
+  }
+}
+`
+
+// buildProjectViewsQuery builds a GraphQL query string for fetching views
+func buildProjectViewsQuery(projectType ProjectType) string {
+	var ownerType string
+	switch projectType {
+	case ProjectTypeOrg:
+		ownerType = "organization"
+	case ProjectTypeUser:
+		ownerType = "user"
+	default:
+		ownerType = "organization"
+	}
+	return fmt.Sprintf(projectViewsQueryTemplate, ownerType)
 }
 
 // graphQLRequest represents a GraphQL request payload
@@ -165,7 +149,8 @@ type projectV2 struct {
 	ID     string        `json:"id"`
 	Title  string        `json:"title"`
 	Fields projectFields `json:"fields"`
-	Items  projectItems  `json:"items"`
+	Items  projectItems  `json:"items,omitempty"` // Only present in items query
+	Views  projectViews  `json:"views,omitempty"` // Only present in views query
 }
 
 // projectFields represents the fields collection
@@ -196,6 +181,19 @@ type projectItems struct {
 type pageInfo struct {
 	HasNextPage bool    `json:"hasNextPage"`
 	EndCursor   *string `json:"endCursor"`
+}
+
+// projectViews represents the views collection
+type projectViews struct {
+	Nodes []projectViewNode `json:"nodes"`
+}
+
+// projectViewNode represents a single project view from GraphQL response
+type projectViewNode struct {
+	ID     string  `json:"id"`
+	Name   string  `json:"name"`
+	Filter *string `json:"filter,omitempty"` // May be null if view has no filter
+	Layout string  `json:"layout"`
 }
 
 // projectItemNode represents a single project item

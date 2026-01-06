@@ -130,6 +130,14 @@ type ProjectItem struct {
 	FieldValues map[string]FieldValue // Field name -> Field value
 }
 
+// ProjectView represents a GitHub Projects V2 view
+type ProjectView struct {
+	ID     string // Global node ID (e.g., "PVT_kwDOABCDEF")
+	Name   string // Human-readable name (e.g., "Blocked Items")
+	Filter string // JSON filter configuration
+	Layout string // TABLE_LAYOUT, BOARD_LAYOUT, ROADMAP_LAYOUT
+}
+
 // FieldFilter represents filtering criteria for project items
 type FieldFilter struct {
 	FieldName string   // Name of the field to filter by
@@ -139,6 +147,8 @@ type FieldFilter struct {
 // ProjectConfig holds project query configuration
 type ProjectConfig struct {
 	Ref          ProjectRef    // Project reference
+	ViewName     string        // Optional view name to filter by
+	ViewID       string        // Optional view ID (takes precedence over ViewName)
 	FieldFilters []FieldFilter // Field filters to apply (AND logic between filters)
 	IncludePRs   bool          // Whether to include pull requests
 	MaxItems     int           // Maximum number of items to fetch

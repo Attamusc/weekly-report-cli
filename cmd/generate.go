@@ -45,7 +45,9 @@ func (a *projectClientAdapter) FetchProjectItems(ctx context.Context, configInte
 
 	// Create project config
 	projectCfg := projects.ProjectConfig{
-		Ref: projectRef,
+		Ref:      projectRef,
+		ViewName: resolverCfg.ProjectView,
+		ViewID:   resolverCfg.ProjectViewID,
 		FieldFilters: []projects.FieldFilter{
 			{
 				FieldName: resolverCfg.ProjectFieldName,
@@ -57,14 +59,21 @@ func (a *projectClientAdapter) FetchProjectItems(ctx context.Context, configInte
 	}
 
 	// Create projects client and fetch items
+	// Note: FetchProjectItems now handles view filter resolution and applies all filters internally
 	client := projects.NewClient(a.token)
 	projectItems, err := client.FetchProjectItems(ctx, projectCfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// Filter items and extract issue refs
-	issueRefs := projects.FilterProjectItems(projectItems, projectCfg)
+	// Extract issue refs from filtered items
+	// Note: Filtering is already done in FetchProjectItems (including view filters)
+	var issueRefs []input.IssueRef
+	for _, item := range projectItems {
+		if item.IssueRef != nil {
+			issueRefs = append(issueRefs, *item.IssueRef)
+		}
+	}
 
 	a.logger.Info("Project items fetched and filtered", "project", projectRef.String(), "items", len(issueRefs))
 
@@ -86,6 +95,8 @@ var (
 	projectFieldValues string
 	projectIncludePRs  bool
 	projectMaxItems    int
+	projectView        string // NEW: View name
+	projectViewID      string // NEW: View ID
 )
 
 var generateCmd = &cobra.Command{
@@ -110,6 +121,18 @@ Examples:
     --project "org:my-org/5" \
     --project-field "Priority" \
     --project-field-values "High,Critical"
+
+  # From project board using a view
+  weekly-report-cli generate \
+    --project "org:my-org/5" \
+    --project-view "Blocked Items"
+
+  # From project board view with additional filters
+  weekly-report-cli generate \
+    --project "org:my-org/5" \
+    --project-view "Current Sprint" \
+    --project-field "Priority" \
+    --project-field-values "High"
 
   # From URL list (stdin)
   cat issues.txt | weekly-report-cli generate --since-days 7
@@ -139,6 +162,8 @@ func init() {
 	generateCmd.Flags().StringVar(&projectFieldValues, "project-field-values", "In Progress,Done,Blocked", "Comma-separated values to match (default: 'In Progress,Done,Blocked')")
 	generateCmd.Flags().BoolVar(&projectIncludePRs, "project-include-prs", false, "Include pull requests from project board (default: issues only)")
 	generateCmd.Flags().IntVar(&projectMaxItems, "project-max-items", 100, "Maximum number of items to fetch from project board")
+	generateCmd.Flags().StringVar(&projectView, "project-view", "", "GitHub project view name (e.g., 'Blocked Items')")
+	generateCmd.Flags().StringVar(&projectViewID, "project-view-id", "", "GitHub project view ID (e.g., 'PVT_kwDOABCDEF') - takes precedence over --project-view")
 }
 
 func runGenerate(cmd *cobra.Command, args []string) error {
@@ -151,7 +176,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load configuration
-	cfg, err := config.FromEnvAndFlags(sinceDays, concurrency, noNotes, verbose, quiet, inputPath, summaryPrompt, projectURL, projectField, projectFieldValuesList, projectIncludePRs, projectMaxItems)
+	cfg, err := config.FromEnvAndFlags(sinceDays, concurrency, noNotes, verbose, quiet, inputPath, summaryPrompt, projectURL, projectField, projectFieldValuesList, projectIncludePRs, projectMaxItems, projectView, projectViewID)
 	if err != nil {
 		return fmt.Errorf("configuration error: %w", err)
 	}
@@ -178,6 +203,8 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		ProjectFieldValues: cfg.Project.FieldValues,
 		ProjectIncludePRs:  cfg.Project.IncludePRs,
 		ProjectMaxItems:    cfg.Project.MaxItems,
+		ProjectView:        cfg.Project.ViewName,
+		ProjectViewID:      cfg.Project.ViewID,
 		URLListPath:        inputPath,
 		UseStdin:           inputPath == "" && cfg.Project.URL == "",
 	}

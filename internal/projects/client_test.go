@@ -686,6 +686,629 @@ func TestClient_FetchProjectItems_DifferentFieldTypes(t *testing.T) {
 	}
 }
 
+// TestClient_FetchProjectViews_OrgProject tests fetching views from an organization project
+func TestClient_FetchProjectViews_OrgProject(t *testing.T) {
+	// Create mock GraphQL server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request headers
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			t.Errorf("expected Authorization header, got %s", r.Header.Get("Authorization"))
+		}
+
+		// Parse request body
+		var req graphQLRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
+
+		// Verify query contains "organization" and "views"
+		if !strings.Contains(req.Query, "organization") {
+			t.Errorf("expected query to contain 'organization'")
+		}
+		if !strings.Contains(req.Query, "views") {
+			t.Errorf("expected query to contain 'views'")
+		}
+
+		// Return mock response with views
+		response := graphQLResponse{
+			Data: &projectData{
+				Organization: &projectV2Wrapper{
+					ProjectV2: &projectV2{
+						ID:    "PVT_123",
+						Title: "Test Project",
+						Views: projectViews{
+							Nodes: []projectViewNode{
+								{
+									ID:     "VIEW1",
+									Name:   "Blocked Items",
+									Filter: stringPtr(`{"Status":["Blocked"]}`),
+									Layout: "TABLE_LAYOUT",
+								},
+								{
+									ID:     "VIEW2",
+									Name:   "Current Sprint",
+									Filter: stringPtr(`{"Iteration":["Sprint 12"]}`),
+									Layout: "BOARD_LAYOUT",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create client
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Parse project ref
+	ref, _ := ParseProjectURL("org:test-org/5")
+
+	// Fetch views
+	views, err := client.FetchProjectViews(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify results
+	if len(views) != 2 {
+		t.Fatalf("expected 2 views, got %d", len(views))
+	}
+
+	// Check first view
+	if views[0].ID != "VIEW1" {
+		t.Errorf("expected ID=VIEW1, got %s", views[0].ID)
+	}
+	if views[0].Name != "Blocked Items" {
+		t.Errorf("expected Name='Blocked Items', got %s", views[0].Name)
+	}
+	if views[0].Filter != `{"Status":["Blocked"]}` {
+		t.Errorf("expected filter, got %s", views[0].Filter)
+	}
+	if views[0].Layout != "TABLE_LAYOUT" {
+		t.Errorf("expected Layout=TABLE_LAYOUT, got %s", views[0].Layout)
+	}
+
+	// Check second view
+	if views[1].ID != "VIEW2" {
+		t.Errorf("expected ID=VIEW2, got %s", views[1].ID)
+	}
+	if views[1].Name != "Current Sprint" {
+		t.Errorf("expected Name='Current Sprint', got %s", views[1].Name)
+	}
+}
+
+// TestClient_FetchProjectViews_UserProject tests fetching views from a user project
+func TestClient_FetchProjectViews_UserProject(t *testing.T) {
+	// Create mock GraphQL server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Parse request body
+		var req graphQLRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
+
+		// Verify query contains "user" for user project
+		if !strings.Contains(req.Query, "user") {
+			t.Errorf("expected query to contain 'user'")
+		}
+
+		// Return mock response
+		response := graphQLResponse{
+			Data: &projectData{
+				User: &projectV2Wrapper{
+					ProjectV2: &projectV2{
+						ID:    "PVT_456",
+						Title: "Personal Project",
+						Views: projectViews{
+							Nodes: []projectViewNode{
+								{
+									ID:     "VIEW3",
+									Name:   "My Tasks",
+									Filter: stringPtr(`{"Assignee":["@me"]}`),
+									Layout: "TABLE_LAYOUT",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create client
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Parse project ref
+	ref, _ := ParseProjectURL("user:testuser/3")
+
+	// Fetch views
+	views, err := client.FetchProjectViews(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify results
+	if len(views) != 1 {
+		t.Fatalf("expected 1 view, got %d", len(views))
+	}
+
+	if views[0].Name != "My Tasks" {
+		t.Errorf("expected Name='My Tasks', got %s", views[0].Name)
+	}
+}
+
+// TestClient_FetchProjectViews_EmptyViews tests project with no views
+func TestClient_FetchProjectViews_EmptyViews(t *testing.T) {
+	// Create mock GraphQL server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Return mock response with no views
+		response := graphQLResponse{
+			Data: &projectData{
+				Organization: &projectV2Wrapper{
+					ProjectV2: &projectV2{
+						ID:    "PVT_123",
+						Title: "Test Project",
+						Views: projectViews{
+							Nodes: []projectViewNode{},
+						},
+					},
+				},
+			},
+		}
+
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create client
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Parse project ref
+	ref, _ := ParseProjectURL("org:test-org/5")
+
+	// Fetch views
+	views, err := client.FetchProjectViews(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify results
+	if len(views) != 0 {
+		t.Fatalf("expected 0 views, got %d", len(views))
+	}
+}
+
+// TestClient_FetchProjectViews_NullFilter tests view with null filter
+func TestClient_FetchProjectViews_NullFilter(t *testing.T) {
+	// Create mock GraphQL server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Return mock response with view that has null filter
+		response := graphQLResponse{
+			Data: &projectData{
+				Organization: &projectV2Wrapper{
+					ProjectV2: &projectV2{
+						ID:    "PVT_123",
+						Title: "Test Project",
+						Views: projectViews{
+							Nodes: []projectViewNode{
+								{
+									ID:     "VIEW1",
+									Name:   "All Items",
+									Filter: nil, // No filter
+									Layout: "TABLE_LAYOUT",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create client
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Parse project ref
+	ref, _ := ParseProjectURL("org:test-org/5")
+
+	// Fetch views
+	views, err := client.FetchProjectViews(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify results
+	if len(views) != 1 {
+		t.Fatalf("expected 1 view, got %d", len(views))
+	}
+
+	if views[0].Name != "All Items" {
+		t.Errorf("expected Name='All Items', got %s", views[0].Name)
+	}
+	if views[0].Filter != "" {
+		t.Errorf("expected empty filter, got %s", views[0].Filter)
+	}
+}
+
+// TestClient_FetchProjectViews_NotFound tests error when project not found
+func TestClient_FetchProjectViews_NotFound(t *testing.T) {
+	// Create mock GraphQL server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+	defer server.Close()
+
+	// Create client
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Parse project ref
+	ref, _ := ParseProjectURL("org:test-org/999")
+
+	// Fetch views
+	_, err := client.FetchProjectViews(context.Background(), ref)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Verify error message contains helpful info
+	if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "404") {
+		t.Errorf("expected error about not found, got: %v", err)
+	}
+}
+
+// TestClient_FetchProjectItems_WithViewName tests fetching items using view name
+func TestClient_FetchProjectItems_WithViewName(t *testing.T) {
+	callCount := 0
+
+	// Create mock GraphQL server that handles both views and items queries
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+
+		var req graphQLRequest
+		json.NewDecoder(r.Body).Decode(&req)
+
+		// First call: fetch views
+		if strings.Contains(req.Query, "views") {
+			response := graphQLResponse{
+				Data: &projectData{
+					Organization: &projectV2Wrapper{
+						ProjectV2: &projectV2{
+							ID:    "PVT_123",
+							Title: "Test Project",
+							Views: projectViews{
+								Nodes: []projectViewNode{
+									{
+										ID:     "VIEW1",
+										Name:   "Blocked Items",
+										Filter: stringPtr(`{"Status": ["Blocked"]}`),
+										Layout: "TABLE_LAYOUT",
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		// Second call: fetch items
+		response := graphQLResponse{
+			Data: &projectData{
+				Organization: &projectV2Wrapper{
+					ProjectV2: &projectV2{
+						ID:    "PVT_123",
+						Title: "Test Project",
+						Items: projectItems{
+							Nodes: []projectItemNode{
+								{
+									ID:   "ITEM1",
+									Type: "ISSUE",
+									Content: &projectItemContent{
+										ID:     "I1",
+										Number: intPtr(123),
+										URL:    "https://github.com/test/repo/issues/123",
+										Repository: &contentRepository{
+											Owner: repositoryOwner{Login: "test"},
+											Name:  "repo",
+										},
+									},
+									FieldValues: projectFieldValues{
+										Nodes: []projectFieldValueNode{
+											{
+												Field: &projectFieldRef{Name: "Status"},
+												Name:  stringPtr("Blocked"),
+											},
+										},
+									},
+								},
+							},
+							PageInfo: pageInfo{
+								HasNextPage: false,
+								EndCursor:   nil,
+							},
+						},
+					},
+				},
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create client
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	// Create config with view name
+	ref, _ := ParseProjectURL("org:test-org/5")
+	config := ProjectConfig{
+		Ref:      ref,
+		ViewName: "Blocked Items",
+		MaxItems: 100,
+	}
+
+	// Fetch items
+	items, err := client.FetchProjectItems(context.Background(), config)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify results
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+
+	// Verify we made 2 calls (views + items)
+	if callCount != 2 {
+		t.Errorf("expected 2 API calls (views + items), got %d", callCount)
+	}
+}
+
+// TestClient_FetchProjectItems_WithViewID tests fetching items using view ID
+func TestClient_FetchProjectItems_WithViewID(t *testing.T) {
+	callCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+
+		var req graphQLRequest
+		json.NewDecoder(r.Body).Decode(&req)
+
+		// First call: fetch views
+		if strings.Contains(req.Query, "views") {
+			response := graphQLResponse{
+				Data: &projectData{
+					Organization: &projectV2Wrapper{
+						ProjectV2: &projectV2{
+							ID:    "PVT_123",
+							Title: "Test Project",
+							Views: projectViews{
+								Nodes: []projectViewNode{
+									{
+										ID:     "VIEW_ABC123",
+										Name:   "High Priority",
+										Filter: stringPtr(`{"Priority": ["High", "Critical"]}`),
+										Layout: "TABLE_LAYOUT",
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		// Second call: fetch items
+		response := graphQLResponse{
+			Data: &projectData{
+				Organization: &projectV2Wrapper{
+					ProjectV2: &projectV2{
+						ID:    "PVT_123",
+						Title: "Test Project",
+						Items: projectItems{
+							Nodes: []projectItemNode{
+								{
+									ID:   "ITEM1",
+									Type: "ISSUE",
+									Content: &projectItemContent{
+										ID:     "I1",
+										Number: intPtr(456),
+										URL:    "https://github.com/test/repo/issues/456",
+										Repository: &contentRepository{
+											Owner: repositoryOwner{Login: "test"},
+											Name:  "repo",
+										},
+									},
+									FieldValues: projectFieldValues{
+										Nodes: []projectFieldValueNode{
+											{
+												Field: &projectFieldRef{Name: "Priority"},
+												Name:  stringPtr("High"),
+											},
+										},
+									},
+								},
+							},
+							PageInfo: pageInfo{
+								HasNextPage: false,
+								EndCursor:   nil,
+							},
+						},
+					},
+				},
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	ref, _ := ParseProjectURL("org:test-org/5")
+	config := ProjectConfig{
+		Ref:      ref,
+		ViewID:   "VIEW_ABC123",
+		MaxItems: 100,
+	}
+
+	items, err := client.FetchProjectItems(context.Background(), config)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+
+	if callCount != 2 {
+		t.Errorf("expected 2 API calls, got %d", callCount)
+	}
+}
+
+// TestClient_FetchProjectItems_ViewWithManualFilters tests merging view and manual filters
+func TestClient_FetchProjectItems_ViewWithManualFilters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req graphQLRequest
+		json.NewDecoder(r.Body).Decode(&req)
+
+		// Views query
+		if strings.Contains(req.Query, "views") {
+			response := graphQLResponse{
+				Data: &projectData{
+					Organization: &projectV2Wrapper{
+						ProjectV2: &projectV2{
+							ID:    "PVT_123",
+							Title: "Test Project",
+							Views: projectViews{
+								Nodes: []projectViewNode{
+									{
+										ID:     "VIEW1",
+										Name:   "Current Sprint",
+										Filter: stringPtr(`{"Iteration": ["Sprint 12"]}`),
+										Layout: "TABLE_LAYOUT",
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		// Items query
+		response := graphQLResponse{
+			Data: &projectData{
+				Organization: &projectV2Wrapper{
+					ProjectV2: &projectV2{
+						ID: "PVT_123",
+						Items: projectItems{
+							Nodes:    []projectItemNode{},
+							PageInfo: pageInfo{HasNextPage: false},
+						},
+					},
+				},
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	ref, _ := ParseProjectURL("org:test-org/5")
+	config := ProjectConfig{
+		Ref:      ref,
+		ViewName: "Current Sprint",
+		FieldFilters: []FieldFilter{
+			{FieldName: "Priority", Values: []string{"High"}},
+		},
+		MaxItems: 100,
+	}
+
+	// Should not error - filters should be merged
+	_, err := client.FetchProjectItems(context.Background(), config)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestClient_FetchProjectItems_ViewNotFound tests error when view not found
+func TestClient_FetchProjectItems_ViewNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := graphQLResponse{
+			Data: &projectData{
+				Organization: &projectV2Wrapper{
+					ProjectV2: &projectV2{
+						ID:    "PVT_123",
+						Title: "Test Project",
+						Views: projectViews{
+							Nodes: []projectViewNode{
+								{
+									ID:     "VIEW1",
+									Name:   "Available View",
+									Filter: stringPtr(`{}`),
+									Layout: "TABLE_LAYOUT",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-token")
+	client.baseURL = server.URL
+
+	ref, _ := ParseProjectURL("org:test-org/5")
+	config := ProjectConfig{
+		Ref:      ref,
+		ViewName: "Nonexistent View",
+		MaxItems: 100,
+	}
+
+	_, err := client.FetchProjectItems(context.Background(), config)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// Error should mention the view name
+	if !strings.Contains(err.Error(), "Nonexistent View") {
+		t.Errorf("error should mention view name, got: %v", err)
+	}
+
+	// Error should list available views
+	if !strings.Contains(err.Error(), "Available View") {
+		t.Errorf("error should list available views, got: %v", err)
+	}
+}
+
 // Helper functions
 func intPtr(i int) *int {
 	return &i

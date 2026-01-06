@@ -53,6 +53,47 @@ func (c *Client) FetchProjectItems(ctx context.Context, config ProjectConfig) ([
 
 	logger.Debug("Fetching project items", "project", config.Ref.String(), "maxItems", config.MaxItems)
 
+	// Build query string for server-side filtering
+	var queryParts []string
+
+	// 1. Add view filter if specified
+	if config.ViewName != "" || config.ViewID != "" {
+		logger.Debug("View specified, resolving view", "viewName", config.ViewName, "viewID", config.ViewID)
+
+		view, err := c.resolveView(ctx, config)
+		if err != nil {
+			return nil, err
+		}
+
+		logger.Debug("View resolved", "viewName", view.Name, "viewID", view.ID, "filter", view.Filter)
+
+		// Add view filter string directly (no parsing needed)
+		if view.Filter != "" && view.Filter != "null" {
+			queryParts = append(queryParts, view.Filter)
+		}
+	}
+
+	// 2. Convert manual filters to query string format
+	if len(config.FieldFilters) > 0 {
+		manualQuery := ConvertFieldFiltersToQueryString(config.FieldFilters)
+		if manualQuery != "" {
+			queryParts = append(queryParts, manualQuery)
+		}
+	}
+
+	// 3. Add item type filtering
+	if !config.IncludePRs {
+		queryParts = append(queryParts, "is:issue")
+	}
+
+	// 4. Always exclude drafts
+	queryParts = append(queryParts, "-is:draft")
+
+	// 5. Combine all query parts with spaces (AND logic)
+	queryString := strings.Join(queryParts, " ")
+
+	logger.Info("Using server-side filtering", "query", queryString)
+
 	var allItems []ProjectItem
 	var cursor *string
 	hasMore := true
@@ -65,10 +106,10 @@ func (c *Client) FetchProjectItems(ctx context.Context, config ProjectConfig) ([
 		// Calculate batch size (don't exceed maxItems)
 		batchSize := min(config.MaxItems-totalFetched, 100)
 
-		logger.Debug("Fetching project page", "cursor", cursor, "batchSize", batchSize)
+		logger.Debug("Fetching project page", "cursor", cursor, "batchSize", batchSize, "query", queryString)
 
-		// Fetch page
-		response, err := c.fetchProjectPage(ctx, query, config.Ref, batchSize, cursor)
+		// Fetch page with server-side filtering
+		response, err := c.fetchProjectPage(ctx, query, config.Ref, batchSize, cursor, queryString)
 		if err != nil {
 			return nil, err
 		}
@@ -80,6 +121,7 @@ func (c *Client) FetchProjectItems(ctx context.Context, config ProjectConfig) ([
 		}
 
 		// Convert items to ProjectItem structs
+		// Items are already filtered by GitHub based on the query
 		pageItems, err := c.convertProjectItems(project.Items.Nodes, config.Ref)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert project items: %w", err)
@@ -95,18 +137,182 @@ func (c *Client) FetchProjectItems(ctx context.Context, config ProjectConfig) ([
 		logger.Debug("Project page fetched", "items", len(pageItems), "totalFetched", totalFetched, "hasMore", hasMore)
 	}
 
-	logger.Info("Project items fetched", "project", config.Ref.String(), "total", len(allItems))
+	logger.Info("Project items fetched (server-filtered)", "project", config.Ref.String(), "total", len(allItems), "query", queryString)
 
+	// Items are already filtered by GitHub - no client-side filtering needed
 	return allItems, nil
 }
 
-// fetchProjectPage fetches a single page of project items
-func (c *Client) fetchProjectPage(ctx context.Context, query string, ref ProjectRef, batchSize int, cursor *string) (*graphQLResponse, error) {
+// FetchProjectViews fetches all views from a project
+func (c *Client) FetchProjectViews(ctx context.Context, ref ProjectRef) ([]ProjectView, error) {
+	// Get logger from context if available
+	logger, ok := ctx.Value("logger").(*slog.Logger)
+	if !ok {
+		logger = slog.Default()
+	}
+
+	logger.Debug("Fetching project views", "project", ref.String())
+
+	// Build the query
+	query := buildProjectViewsQuery(ref.Type)
+
+	// Build variables (no pagination needed - fetching first 20 views is sufficient)
+	variables := map[string]interface{}{
+		"owner":  ref.Owner,
+		"number": ref.Number,
+	}
+
+	// Build request
+	request := graphQLRequest{
+		Query:     query,
+		Variables: variables,
+	}
+
+	// Execute with retries
+	response, err := c.executeGraphQLWithRetry(ctx, request, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract project data
+	project := response.Data.GetProject()
+	if project == nil {
+		return nil, fmt.Errorf("project not found: %s", ref.String())
+	}
+
+	// Convert view nodes to ProjectView structs
+	views := make([]ProjectView, 0, len(project.Views.Nodes))
+	for _, node := range project.Views.Nodes {
+		view := ProjectView{
+			ID:     node.ID,
+			Name:   node.Name,
+			Layout: node.Layout,
+		}
+
+		// Filter may be null/nil in GraphQL response
+		if node.Filter != nil {
+			view.Filter = *node.Filter
+		}
+
+		views = append(views, view)
+	}
+
+	logger.Info("Project views fetched", "project", ref.String(), "total", len(views))
+
+	return views, nil
+}
+
+// resolveView resolves a view by ID or name
+func (c *Client) resolveView(ctx context.Context, config ProjectConfig) (*ProjectView, error) {
+	// Get logger from context
+	logger, ok := ctx.Value("logger").(*slog.Logger)
+	if !ok {
+		logger = slog.Default()
+	}
+
+	// Fetch all views from the project
+	views, err := c.FetchProjectViews(ctx, config.Ref)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch project views: %w", err)
+	}
+
+	// If ViewID is specified, use it (takes precedence)
+	if config.ViewID != "" {
+		logger.Debug("Looking up view by ID", "viewID", config.ViewID)
+		view, err := findViewByID(views, config.ViewID)
+		if err != nil {
+			return nil, err
+		}
+		return view, nil
+	}
+
+	// Otherwise, use ViewName
+	if config.ViewName != "" {
+		logger.Debug("Looking up view by name", "viewName", config.ViewName)
+		view, err := findViewByName(views, config.ViewName)
+		if err != nil {
+			// Enhance error with available views
+			return nil, formatViewNotFoundError(config.ViewName, views)
+		}
+		return view, nil
+	}
+
+	// Should never reach here (validated by caller)
+	return nil, fmt.Errorf("no view name or ID specified")
+}
+
+// findViewByID finds a view by its exact ID
+func findViewByID(views []ProjectView, viewID string) (*ProjectView, error) {
+	for _, view := range views {
+		if view.ID == viewID {
+			return &view, nil
+		}
+	}
+
+	// Build helpful error message
+	var availableIDs []string
+	for _, view := range views {
+		availableIDs = append(availableIDs, fmt.Sprintf("%s (ID: %s)", view.Name, view.ID))
+	}
+
+	return nil, fmt.Errorf(
+		"view with ID '%s' not found\n\n"+
+			"Available views:\n  - %s\n\n"+
+			"Tip: View IDs may change. Consider using --project-view with the view name instead",
+		viewID,
+		strings.Join(availableIDs, "\n  - "),
+	)
+}
+
+// findViewByName finds a view by name (case-insensitive)
+func findViewByName(views []ProjectView, viewName string) (*ProjectView, error) {
+	nameLower := strings.ToLower(strings.TrimSpace(viewName))
+
+	for _, view := range views {
+		if strings.ToLower(strings.TrimSpace(view.Name)) == nameLower {
+			return &view, nil
+		}
+	}
+
+	// Not found - caller will format error with available views
+	return nil, fmt.Errorf("view not found: %s", viewName)
+}
+
+// formatViewNotFoundError creates a helpful error message when view is not found
+func formatViewNotFoundError(viewName string, views []ProjectView) error {
+	if len(views) == 0 {
+		return fmt.Errorf(
+			"view '%s' not found: project has no views\n\n"+
+				"This project doesn't have any views defined.\n"+
+				"Use manual field filters instead:\n"+
+				"  --project-field \"Status\" --project-field-values \"Blocked\"",
+			viewName,
+		)
+	}
+
+	// Build list of available view names
+	var availableViews []string
+	for _, view := range views {
+		availableViews = append(availableViews, view.Name)
+	}
+
+	return fmt.Errorf(
+		"view '%s' not found\n\n"+
+			"Available views:\n  - %s\n\n"+
+			"Tip: View names are case-insensitive",
+		viewName,
+		strings.Join(availableViews, "\n  - "),
+	)
+}
+
+// fetchProjectPage fetches a single page of project items with optional query filter
+func (c *Client) fetchProjectPage(ctx context.Context, query string, ref ProjectRef, batchSize int, cursor *string, queryFilter string) (*graphQLResponse, error) {
 	// Build variables
 	variables := map[string]interface{}{
 		"owner":  ref.Owner,
 		"number": ref.Number,
 		"first":  batchSize,
+		"query":  queryFilter, // Server-side filtering query
 	}
 	if cursor != nil {
 		variables["cursor"] = *cursor

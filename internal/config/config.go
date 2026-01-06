@@ -27,11 +27,13 @@ type Config struct {
 		FieldValues []string
 		IncludePRs  bool
 		MaxItems    int
+		ViewName    string
+		ViewID      string
 	}
 }
 
 // FromEnvAndFlags creates a Config from environment variables and CLI flags
-func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool, quiet bool, inputPath string, summaryPrompt string, projectURL string, projectField string, projectFieldValues []string, projectIncludePRs bool, projectMaxItems int) (*Config, error) {
+func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool, quiet bool, inputPath string, summaryPrompt string, projectURL string, projectField string, projectFieldValues []string, projectIncludePRs bool, projectMaxItems int, projectView string, projectViewID string) (*Config, error) {
 	// Load environment variables from .env file if it exists
 	_ = godotenv.Load() // Silently ignore if .env file doesn't exist
 	config := &Config{
@@ -71,6 +73,8 @@ func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool,
 	config.Project.FieldValues = projectFieldValues
 	config.Project.IncludePRs = projectIncludePRs
 	config.Project.MaxItems = projectMaxItems
+	config.Project.ViewName = projectView
+	config.Project.ViewID = projectViewID
 
 	return config, nil
 }

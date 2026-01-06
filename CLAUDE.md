@@ -24,7 +24,7 @@ The application follows a 4-phase pipeline architecture:
 **Core Modules:**
 - `internal/config/` - Configuration management (env vars + CLI flags)
 - `internal/input/` - GitHub URL parsing, validation, and unified input resolution
-- `internal/projects/` - GitHub Projects V2 integration with GraphQL client and filtering
+- `internal/projects/` - GitHub Projects V2 integration with GraphQL client, view support, and filtering
 - `internal/github/` - GitHub API client with OAuth2 and retry logic
 - `internal/report/` - Report extraction from HTML comments and selection logic
 - `internal/ai/` - AI summarization interface with GitHub Models implementation
@@ -61,8 +61,13 @@ input.ResolveIssueRefs (auto-detects mode)
     ↓
 If Project Mode:
     projectClientAdapter → projects.Client → GitHub GraphQL API
-    → projects.FetchProjectItems (paginated)
-    → projects.FilterProjectItems (field-based filtering)
+    → If view specified:
+        → projects.FetchProjectViews (fetch all views)
+        → Find view by name/ID
+        → projects.ParseViewFilter (parse view JSON to FieldFilter)
+        → projects.MergeFilters (merge with manual filters if any)
+    → projects.FetchProjectItems (paginated, with merged filters)
+    → projects.FilterProjectItems (apply filters client-side)
     → []IssueRef
     ↓
 Deduplicate & merge with URL list (if mixed mode)
@@ -177,7 +182,20 @@ weekly-report-cli generate \
   --project-field-values "High,Critical" \
   --since-days 7
 
-# Mixed Mode (NEW)
+# Project View Mode (NEW) - reference pre-configured views
+weekly-report-cli generate \
+  --project "org:my-org/5" \
+  --project-view "Blocked Items" \
+  --since-days 7
+
+# Project View + Manual Filter
+weekly-report-cli generate \
+  --project "org:my-org/5" \
+  --project-view "Current Sprint" \
+  --project-field "Priority" \
+  --project-field-values "High"
+
+# Mixed Mode
 weekly-report-cli generate \
   --project "org:my-org/5" \
   --input critical-issues.txt \
