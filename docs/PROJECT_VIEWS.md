@@ -61,6 +61,7 @@ weekly-report-cli generate \
 ```
 
 This will:
+
 1. Fetch all views from project `org:my-org/5`
 2. Find the view named "High Priority"
 3. Parse that view's filter configuration
@@ -80,6 +81,7 @@ weekly-report-cli generate \
 ```
 
 **How to get a view ID:**
+
 1. Open your project in GitHub
 2. Navigate to the desired view
 3. The view ID is in the URL after `?view=`
@@ -100,6 +102,7 @@ weekly-report-cli generate \
 ```
 
 **Filter Merging Behavior:**
+
 - View filters act as the **base**
 - Manual filters are **added** (AND logic)
 - If a manual filter targets the same field as the view, the manual filter **overrides** it
@@ -149,22 +152,24 @@ When you specify `--project-view` or `--project-view-id`:
 The tool supports common filter types used in GitHub Projects views. GitHub uses a query string filter format:
 
 **Filter Format:**
+
 ```
 type:Epic,Initiative quarter:FY26Q2
 ```
 
 **Syntax:**
+
 - Space-separated field:value pairs
 - Comma-separated values for multiple values in a field
 - Field names are case-sensitive as they appear in GitHub
 
-| Filter Type | Support | Example |
-|-------------|---------|---------|
-| Field equals value | ✅ Full | `type:Epic` |
-| Field with multiple values | ✅ Full | `type:Epic,Initiative` |
-| Multiple fields (AND logic) | ✅ Full | `type:Epic quarter:FY26Q2` |
-| Complex boolean logic | ❌ Not supported | `(A OR B) AND (C OR D)` |
-| Date range filters | ❌ Not supported | `date>2025-01-01` |
+| Filter Type                 | Support          | Example                    |
+| --------------------------- | ---------------- | -------------------------- |
+| Field equals value          | ✅ Full          | `type:Epic`                |
+| Field with multiple values  | ✅ Full          | `type:Epic,Initiative`     |
+| Multiple fields (AND logic) | ✅ Full          | `type:Epic quarter:FY26Q2` |
+| Complex boolean logic       | ❌ Not supported | `(A OR B) AND (C OR D)`    |
+| Date range filters          | ❌ Not supported | `date>2025-01-01`          |
 
 ### Filter Merging Details
 
@@ -233,8 +238,9 @@ weekly-report-cli generate \
 ```
 
 This command:
+
 1. Fetches items matching "Sprint 23 Active" view filters
-2. Further filters to Team = "Backend" OR "Infrastructure"  
+2. Further filters to Team = "Backend" OR "Infrastructure"
 3. Adds issues from `critical-blockers.txt`
 4. Deduplicates across all sources
 5. Looks for updates in last 7 days
@@ -244,15 +250,18 @@ This command:
 ### Performance Considerations
 
 **View Overhead:**
+
 - Fetching views adds ~1 extra API call per execution
 - Minimal impact: typically <100ms
 - Views are fetched once per command execution
 
 **Caching:**
+
 - Views are NOT cached between executions
 - Future enhancement: local view cache with TTL
 
 **Optimization Tips:**
+
 - Use view IDs in automation (skips name lookup)
 - Keep `--project-max-items` reasonable (default: 100)
 - Consider `--concurrency` for large projects (default: 5)
@@ -283,11 +292,13 @@ Views are **purely additive** - no breaking changes to existing behavior.
 ### View Not Found
 
 **Problem:**
+
 ```
 Error: view 'My View' not found in project 'org:my-org/5'
 ```
 
 **Solutions:**
+
 1. Check the view name spelling (case-insensitive but whitespace matters)
 2. Verify the view exists in the project (GitHub UI > Project > Views)
 3. Ensure you have `read:project` scope in your `GITHUB_TOKEN`
@@ -296,16 +307,19 @@ Error: view 'My View' not found in project 'org:my-org/5'
 ### View ID Not Found
 
 **Problem:**
+
 ```
 Error: view with ID 'PVT_kwDOABCDEF' not found
 ```
 
 **Possible Causes:**
+
 - View was deleted from the project
 - View ID is incorrect/typo
 - View belongs to a different project
 
 **Solution:**
+
 - Use view name instead: `--project-view "View Name"`
 - Verify view exists in GitHub UI
 - Check project URL is correct
@@ -313,6 +327,7 @@ Error: view with ID 'PVT_kwDOABCDEF' not found
 ### Unsupported Filter Type
 
 **Problem:**
+
 ```
 Error: unable to parse view filter for 'Complex View'
 Reason: Complex boolean logic is not yet supported
@@ -320,6 +335,7 @@ Reason: Complex boolean logic is not yet supported
 
 **Workaround:**
 Use manual field filters instead:
+
 ```bash
 # Instead of using the complex view, specify filters manually
 weekly-report-cli generate \
@@ -336,9 +352,11 @@ Supported filter types are listed in [Supported View Filter Types](#supported-vi
 View has no filters configured (fetches all items).
 
 **Behavior:**
+
 - Empty view filter = fetch all items (up to `--project-max-items`)
 - This is expected behavior
 - Add manual filters if you need to narrow down:
+
   ```bash
   --project-view "All Items" \
   --project-field "Status" \
@@ -348,14 +366,17 @@ View has no filters configured (fetches all items).
 ### Permission Denied
 
 **Problem:**
+
 ```
 Error: failed to fetch project views: resource not accessible by integration
 ```
 
 **Solution:**
+
 1. Ensure `GITHUB_TOKEN` includes `read:project` scope
 2. Regenerate token if needed (GitHub Settings > Developer settings)
 3. Verify token has access to the organization/project:
+
    ```bash
    export GITHUB_TOKEN=ghp_your_new_token_here
    ```
@@ -367,6 +388,7 @@ View name contains quotes, backslashes, or other special characters.
 
 **Solution:**
 Use proper shell escaping:
+
 ```bash
 # View name: My "Special" View
 --project-view 'My "Special" View'
@@ -400,15 +422,18 @@ Planned features (not in current MVP):
 ### Workarounds for Limitations
 
 **Complex Filters:**
+
 - Use manual `--project-field` flags instead of views
 - Combine multiple simple views via URL list mode
 
 **Performance with Large Projects:**
+
 - Use `--project-max-items` to limit fetch size
 - Increase `--concurrency` for faster processing
 - Use field filters to narrow scope before view application
 
 **View Management:**
+
 - Keep view names simple (no special characters)
 - Document view IDs for automation
 - Create "report-specific" views for common use cases
