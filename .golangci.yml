@@ -22,7 +22,6 @@ linters:
     - gocyclo       # Compute cyclomatic complexities of functions
     - dupl          # Check for code duplication
     - gosec         # Inspect source code for security problems
-    - exportloopref # Check for pointers to enclosing loop variables
 
 linters-settings:
   errcheck:
@@ -30,7 +29,8 @@ linters-settings:
     check-blank: true
   
   govet:
-    check-shadowing: true
+    enable:
+      - shadow
   
   gocyclo:
     min-complexity: 15

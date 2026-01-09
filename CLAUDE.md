@@ -9,7 +9,9 @@ This is a Go CLI tool called `weekly-report-cli` that generates weekly status re
 ## Architecture
 
 ### Core Pipeline
+
 The application follows a 3-phase pipeline architecture:
+
 1. **Phase A: Data Collection (Parallel)** - Resolve issues, fetch GitHub data, and extract reports without AI
 2. **Phase B: Batch Summarization (Single API Call)** - Summarize all updates in one batched request
 3. **Phase C: Result Assembly** - Match summaries to issues and render markdown output
@@ -19,10 +21,12 @@ This batched approach minimizes AI API calls (N issues → 1 API call), avoiding
 ### Key Components
 
 **Command Structure:**
+
 - `cmd/root.go` - CLI flags and environment configuration
 - `cmd/generate.go` - Main pipeline orchestration with worker pools
 
 **Core Modules:**
+
 - `internal/config/` - Configuration management (env vars + CLI flags)
 - `internal/input/` - GitHub URL parsing, validation, and unified input resolution
 - `internal/projects/` - GitHub Projects V2 integration with GraphQL client, view support, and filtering
@@ -35,6 +39,7 @@ This batched approach minimizes AI API calls (N issues → 1 API call), avoiding
 ### Data Flow
 
 **Phase A: Data Collection (Parallel)**
+
 1. **Input Resolution** - Resolve issue references from one of three modes:
    - URL List Mode: Parse GitHub issue URLs from stdin/file
    - Project Board Mode: Fetch issues from GitHub Projects V2 via GraphQL with field filtering
@@ -46,13 +51,16 @@ This batched approach minimizes AI API calls (N issues → 1 API call), avoiding
 6. **Status & Date Mapping** - Map trending status and parse target dates
 
 **Phase B: Batch Summarization (Single Request)**
+
 7. **Batch AI Summarization** - Collect all update texts and send ONE batched API request to GitHub Models
-   - Supports up to 25 items per batch (chunked if larger)
-   - JSON response format with URL-to-summary mapping
-   - Markdown fallback parsing if JSON fails
-   - Falls back to raw text if API fails
+
+- Supports up to 25 items per batch (chunked if larger)
+- JSON response format with URL-to-summary mapping
+- Markdown fallback parsing if JSON fails
+- Falls back to raw text if API fails
 
 **Phase C: Result Assembly**
+
 8. **Summary Application** - Match AI summaries to issues by URL
 9. **Rendering** - Render markdown table with status, epic info, target date, and summary
 
@@ -91,6 +99,7 @@ Existing pipeline (unchanged)
 This project includes a comprehensive Makefile for development tasks:
 
 ### Quick Development Cycle
+
 ```bash
 # Complete development pipeline (recommended)
 make all
@@ -109,6 +118,7 @@ make deps
 ```
 
 ### Build Variants
+
 ```bash
 # Development build
 make build
@@ -124,6 +134,7 @@ make release
 ```
 
 ### Testing & Quality
+
 ```bash
 # Run tests with race detection
 make test-race
@@ -142,6 +153,7 @@ make bench
 ```
 
 ### Development Workflow
+
 ```bash
 # File watching for development
 make dev
@@ -157,6 +169,7 @@ make help
 ```
 
 ### Legacy Go Commands (still available)
+
 ```bash
 # Manual Go commands if needed
 go mod tidy
@@ -168,16 +181,19 @@ go build -o weekly-report-cli .
 ## Configuration
 
 ### Required Environment Variables
+
 - `GITHUB_TOKEN` - Personal Access Token with scopes:
   - `repo` - For private repository access
   - `read:project` - For GitHub Projects V2 board access (required for project board integration)
 
-### Optional Environment Variables  
+### Optional Environment Variables
+
 - `GITHUB_MODELS_BASE_URL` - Default: `https://models.github.ai`
 - `GITHUB_MODELS_MODEL` - Default: `gpt-4o-mini`
 - `DISABLE_SUMMARY` - Set to disable AI summarization
 
 ### CLI Usage
+
 ```bash
 # URL List Mode (traditional)
 cat links.txt | weekly-report-cli generate --since-days 7
@@ -214,13 +230,16 @@ weekly-report-cli generate \
 ```
 
 **Project Board Defaults:**
+
 - Field: "Status"
 - Values: "In Progress,Done,Blocked"
 
 ## Key Implementation Details
 
 ### Report Data Format
+
 Reports are identified by HTML comment marker and use structured data extraction:
+
 ```html
 <!-- data key="isReport" value="true" -->
 <!-- data key="trending" start -->🟣 done<!-- data end -->
@@ -229,6 +248,7 @@ Reports are identified by HTML comment marker and use structured data extraction
 ```
 
 ### Status Mapping
+
 - `🟢/green/on track` → `:green_circle: On Track`
 - `🟡/yellow/at risk` → `:yellow_circle: At Risk`
 - `🔴/red/blocked/off track` → `:red_circle: Off Track`
@@ -236,16 +256,19 @@ Reports are identified by HTML comment marker and use structured data extraction
 - `🟣/purple/done/complete` → `:purple_circle: Done`
 
 ### Concurrency Model
+
 Uses bounded worker pools for parallel GitHub API requests with configurable concurrency limits.
 
 ### Error Handling
+
 - GitHub API: Retry logic for 5xx errors and rate limits
-- AI API: Jittered backoff for 429 responses  
+- AI API: Jittered backoff for 429 responses
 - Input: Graceful handling of malformed URLs and missing data
 
 ## Testing Strategy
 
 Each module should have comprehensive unit tests:
+
 - URL parsing with edge cases and deduplication
 - GitHub API mocking with httptest.Server
 - Report extraction with exact sample validation
@@ -253,6 +276,7 @@ Each module should have comprehensive unit tests:
 - End-to-end integration tests with mocked dependencies
 
 ## Exit Codes
+
 - `0` - Success
 - `2` - No rows produced (valid but empty result)
 - `>2` - Fatal errors
