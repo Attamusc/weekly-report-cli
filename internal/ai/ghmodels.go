@@ -82,7 +82,7 @@ Example response format:
   "https://github.com/org/repo/issues/2": "Team fixed critical race condition..."
 }`
 
-	temperature    = 1
+	temperature    = 1 // gpt-5o-mini only supports temperature of 1
 	maxRetries     = 3
 	baseDelay      = 1 * time.Second
 	maxBatchSize   = 25   // Maximum items per batch to avoid token limits

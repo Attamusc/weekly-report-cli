@@ -106,8 +106,8 @@ func TestGHModelsClient_Summarize(t *testing.T) {
 					t.Errorf("Expected model gpt-4o-mini, got %s", request.Model)
 				}
 
-				if request.Temperature != 0.2 {
-					t.Errorf("Expected temperature 0.2, got %f", request.Temperature)
+				if request.Temperature != 1 {
+					t.Errorf("Expected temperature 1, got %f", request.Temperature)
 				}
 
 				if len(request.Messages) != 2 {
