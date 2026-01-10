@@ -3,12 +3,13 @@ package projects
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -122,10 +123,7 @@ func (c *Client) FetchProjectItems(ctx context.Context, config ProjectConfig) ([
 
 		// Convert items to ProjectItem structs
 		// Items are already filtered by GitHub based on the query
-		pageItems, err := c.convertProjectItems(project.Items.Nodes, config.Ref)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert project items: %w", err)
-		}
+		pageItems := c.convertProjectItems(project.Items.Nodes)
 
 		allItems = append(allItems, pageItems...)
 		totalFetched += len(pageItems)
@@ -413,7 +411,7 @@ func (c *Client) executeGraphQL(ctx context.Context, request graphQLRequest) (*g
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read response body
 	respBody, err := io.ReadAll(resp.Body)
@@ -440,7 +438,7 @@ func (c *Client) executeGraphQL(ctx context.Context, request graphQLRequest) (*g
 }
 
 // convertProjectItems converts GraphQL response items to ProjectItem structs
-func (c *Client) convertProjectItems(nodes []projectItemNode, ref ProjectRef) ([]ProjectItem, error) {
+func (c *Client) convertProjectItems(nodes []projectItemNode) []ProjectItem {
 	var items []ProjectItem
 
 	for _, node := range nodes {
@@ -522,7 +520,7 @@ func (c *Client) convertProjectItems(nodes []projectItemNode, ref ProjectRef) ([
 		items = append(items, item)
 	}
 
-	return items, nil
+	return items
 }
 
 // httpError represents an HTTP error response
@@ -560,7 +558,8 @@ func calculateBackoff(attempt int) time.Duration {
 
 	// Add jitter (±25%)
 	jitterMs := backoffMs / 4
-	jitter := rand.Intn(jitterMs*2) - jitterMs
+	jitterBig, _ := rand.Int(rand.Reader, big.NewInt(int64(jitterMs*2+1)))
+	jitter := int(jitterBig.Int64()) - jitterMs
 
 	return time.Duration(backoffMs+jitter) * time.Millisecond
 }

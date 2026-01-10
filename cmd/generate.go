@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -183,7 +182,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 
 	// Setup logging
 	logger := setupLogger(cfg)
-	ctx = context.WithValue(ctx, "logger", logger)
+	ctx = context.WithValue(ctx, github.LoggerContextKey{}, logger)
 
 	// Initialize project client if needed
 	var projectClient *projectClientAdapter
@@ -469,7 +468,7 @@ func batchSummarize(ctx context.Context, summarizer ai.Summarizer, allData []Iss
 // collectIssueData fetches GitHub data and extracts reports without AI summarization
 func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.IssueRef, since time.Time, sinceDays int) (IssueData, error) {
 	// Get logger from context
-	logger, ok := ctx.Value("logger").(*slog.Logger)
+	logger, ok := ctx.Value(github.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
@@ -502,7 +501,7 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 
 	// Case 1: No reports found
 	if len(reports) == 0 {
-		if issueData.State == "closed" {
+		if issueData.State == github.StateClosed {
 			// Issue is closed - use Done status
 			result.Status = derive.Done
 			result.TargetDate = issueData.ClosedAt
@@ -539,7 +538,7 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 
 	// Case 2a: Reports exist but no update text
 	if len(updateTexts) == 0 {
-		if issueData.State == "closed" {
+		if issueData.State == github.StateClosed {
 			// Issue is closed - use Done status
 			result.Status = derive.Done
 			if result.TargetDate == nil {
@@ -576,204 +575,4 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 	}
 
 	return result, nil
-}
-
-// summarizeWithFallback provides consistent AI summarization with fallback handling
-func summarizeWithFallback(ctx context.Context, summarizer ai.Summarizer, issueTitle, issueURL, updateText string, fallbackText string, logger *slog.Logger) string {
-	// Check if updateText is empty or only whitespace
-	trimmed := strings.TrimSpace(updateText)
-	if trimmed == "" {
-		return fallbackText
-	}
-
-	summary, err := summarizer.Summarize(ctx, issueTitle, issueURL, updateText)
-	if err != nil {
-		logger.Debug("AI summarization failed for closing comment, using fallback", "error", err)
-		return trimmed // Use trimmed original text as fallback, not the generic fallback
-	}
-
-	logger.Debug("AI summarization succeeded for closing comment")
-	return summary
-}
-
-// processIssue handles the complete pipeline for a single GitHub issue
-func processIssue(ctx context.Context, client *githubapi.Client, summarizer ai.Summarizer,
-	ref input.IssueRef, since time.Time, sinceDays int) IssueResult {
-
-	// Get logger from context
-	logger, ok := ctx.Value("logger").(*slog.Logger)
-	if !ok {
-		logger = slog.Default()
-	}
-
-	logger.Debug("Processing issue", "url", ref.URL)
-
-	// Fetch issue data
-	logger.Debug("Fetching issue data", "issue", ref.String())
-	issueData, err := github.FetchIssue(ctx, client, ref)
-	if err != nil {
-		logger.Debug("Failed to fetch issue data", "issue", ref.String(), "error", err)
-		return IssueResult{IssueURL: ref.URL, Err: fmt.Errorf("failed to fetch issue: %w", err)}
-	}
-
-	// Fetch comments since the time window
-	logger.Debug("Fetching comments", "issue", ref.String(), "since", since.Format("2006-01-02"))
-	comments, err := github.FetchCommentsSince(ctx, client, ref, since)
-	if err != nil {
-		logger.Debug("Failed to fetch comments", "issue", ref.String(), "error", err)
-		return IssueResult{IssueURL: ref.URL, Err: fmt.Errorf("failed to fetch comments: %w", err)}
-	}
-
-	// Select reports within the time window
-	logger.Debug("Parsing reports", "issue", ref.String(), "comments", len(comments))
-	reports := report.SelectReports(comments, since)
-
-	if len(reports) == 0 {
-		logger.Debug("No reports found in time window", "issue", ref.String())
-
-		// Check if issue is closed - if so, use Done status with closing information
-		if issueData.State == "closed" {
-			logger.Debug("Issue is closed, using Done status", "issue", ref.String())
-			status := derive.Done
-
-			// Use AI summarization for closing comment
-			summary := summarizeWithFallback(ctx, summarizer, issueData.Title, ref.URL, issueData.CloseReason, "Issue was closed", logger)
-
-			// Use close date as target date
-			var targetDate *time.Time
-			if issueData.ClosedAt != nil {
-				targetDate = issueData.ClosedAt
-			}
-
-			row := format.NewRow(status, issueData.Title, ref.URL, targetDate, summary)
-			return IssueResult{
-				IssueURL: ref.URL,
-				Row:      &row,
-				Note:     nil, // No notes needed for closed issues
-			}
-		}
-
-		// Issue is open - create row with NeedsUpdate status and add note
-		status := derive.NeedsUpdate
-		summary := fmt.Sprintf("No update provided in last %d days", sinceDays)
-		row := format.NewRow(status, issueData.Title, ref.URL, nil, summary)
-
-		note := &format.Note{
-			Kind:      format.NoteNoUpdatesInWindow,
-			IssueURL:  ref.URL,
-			SinceDays: sinceDays,
-		}
-		return IssueResult{IssueURL: ref.URL, Row: &row, Note: note}
-	}
-
-	logger.Debug("Found reports", "issue", ref.String(), "count", len(reports))
-
-	// Use the newest report (reports are sorted newest-first)
-	newestReport := reports[0]
-
-	// Collect update texts for summarization (newest first)
-	var updateTexts []string
-	for _, rep := range reports {
-		if rep.UpdateRaw != "" {
-			updateTexts = append(updateTexts, rep.UpdateRaw)
-		}
-	}
-
-	if len(updateTexts) == 0 {
-		logger.Debug("No update text found", "issue", ref.String())
-
-		// Check if issue is closed - if so, use Done status with closing information
-		if issueData.State == "closed" {
-			logger.Debug("Issue is closed but has reports, using Done status", "issue", ref.String())
-			status := derive.Done
-
-			// Use AI summarization for closing comment
-			summary := summarizeWithFallback(ctx, summarizer, issueData.Title, ref.URL, issueData.CloseReason, "Issue was closed", logger)
-
-			// Parse target date from newest report if available, otherwise use close date
-			var targetDate *time.Time
-			if len(reports) > 0 {
-				targetDate = derive.ParseTargetDate(reports[0].TargetDate)
-			}
-			if targetDate == nil && issueData.ClosedAt != nil {
-				targetDate = issueData.ClosedAt
-			}
-
-			row := format.NewRow(status, issueData.Title, ref.URL, targetDate, summary)
-			return IssueResult{
-				IssueURL: ref.URL,
-				Row:      &row,
-				Note:     nil, // No notes needed for closed issues
-			}
-		}
-
-		// Issue is open - Reports exist but no update text - create row with NeedsUpdate status and add note
-		status := derive.NeedsUpdate
-		summary := fmt.Sprintf("No structured update found in last %d days", sinceDays)
-
-		// Parse target date from newest report if available
-		var targetDate *time.Time
-		if len(reports) > 0 {
-			targetDate = derive.ParseTargetDate(reports[0].TargetDate)
-		}
-
-		row := format.NewRow(status, issueData.Title, ref.URL, targetDate, summary)
-
-		note := &format.Note{
-			Kind:      format.NoteNoUpdatesInWindow,
-			IssueURL:  ref.URL,
-			SinceDays: sinceDays,
-		}
-		return IssueResult{IssueURL: ref.URL, Row: &row, Note: note}
-	}
-
-	// Generate summary
-	logger.Debug("Generating summary", "issue", ref.String(), "updates", len(updateTexts))
-	var summary string
-	var summaryErr error
-	if len(updateTexts) == 1 {
-		summary, summaryErr = summarizer.Summarize(ctx, issueData.Title, ref.URL, updateTexts[0])
-	} else {
-		summary, summaryErr = summarizer.SummarizeMany(ctx, issueData.Title, ref.URL, updateTexts)
-	}
-
-	if summaryErr != nil {
-		logger.Debug("AI summarization failed, using fallback", "issue", ref.String(), "error", summaryErr)
-		// Fall back to raw text if summarization fails
-		if len(updateTexts) == 1 {
-			summary = updateTexts[0]
-		} else {
-			summary = updateTexts[0] // Use newest update as fallback
-		}
-	} else {
-		logger.Debug("AI summarization succeeded", "issue", ref.String())
-	}
-
-	// Map status from trending field
-	status := derive.MapTrending(newestReport.TrendingRaw)
-
-	// Parse target date
-	targetDate := derive.ParseTargetDate(newestReport.TargetDate)
-
-	// Create table row
-	logger.Debug("Creating table row", "issue", ref.String(), "status", status)
-	row := format.NewRow(status, issueData.Title, ref.URL, targetDate, summary)
-
-	// Add note if multiple reports were found
-	var note *format.Note
-	if len(reports) >= 2 {
-		logger.Debug("Multiple reports found, adding note", "issue", ref.String(), "count", len(reports))
-		note = &format.Note{
-			Kind:      format.NoteMultipleUpdates,
-			IssueURL:  ref.URL,
-			SinceDays: sinceDays,
-		}
-	}
-
-	logger.Debug("Successfully processed issue", "issue", ref.String())
-	return IssueResult{
-		IssueURL: ref.URL,
-		Row:      &row,
-		Note:     note,
-	}
 }

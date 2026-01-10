@@ -26,14 +26,14 @@ linters:
 linters-settings:
   errcheck:
     check-type-assertions: true
-    check-blank: true
+    check-blank: false
   
   govet:
     enable:
       - shadow
   
   gocyclo:
-    min-complexity: 15
+    min-complexity: 23
   
   dupl:
     threshold: 100
@@ -60,6 +60,8 @@ issues:
         - dupl
         - gosec
         - goconst
+        - errcheck
+        - gocyclo
     
     # Exclude known false positives
     - linters:

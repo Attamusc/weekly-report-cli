@@ -2,6 +2,12 @@ package projects
 
 import "fmt"
 
+// Owner types for GraphQL queries
+const (
+	ownerTypeOrganization = "organization"
+	ownerTypeUser         = "user"
+)
+
 // GraphQL query template for fetching project items
 // The %s placeholder will be replaced with either "organization" or "user"
 // The query parameter allows server-side filtering using GitHub's filter syntax
@@ -59,11 +65,11 @@ func buildProjectQuery(projectType ProjectType) string {
 	var ownerType string
 	switch projectType {
 	case ProjectTypeOrg:
-		ownerType = "organization"
+		ownerType = ownerTypeOrganization
 	case ProjectTypeUser:
-		ownerType = "user"
+		ownerType = ownerTypeUser
 	default:
-		ownerType = "organization"
+		ownerType = ownerTypeOrganization
 	}
 	return fmt.Sprintf(projectItemsQueryTemplate, ownerType)
 }
@@ -94,11 +100,11 @@ func buildProjectViewsQuery(projectType ProjectType) string {
 	var ownerType string
 	switch projectType {
 	case ProjectTypeOrg:
-		ownerType = "organization"
+		ownerType = ownerTypeOrganization
 	case ProjectTypeUser:
-		ownerType = "user"
+		ownerType = ownerTypeUser
 	default:
-		ownerType = "organization"
+		ownerType = ownerTypeOrganization
 	}
 	return fmt.Sprintf(projectViewsQueryTemplate, ownerType)
 }

@@ -178,7 +178,7 @@ func fetchFromURLList(cfg ResolverConfig) ([]IssueRef, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to open input file %s: %w", cfg.URLListPath, err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		reader = file
 	} else {
 		return nil, fmt.Errorf("no URL list source specified")

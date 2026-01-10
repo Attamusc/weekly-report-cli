@@ -78,7 +78,7 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if resp.StatusCode == http.StatusForbidden {
 				if retryAfter := getRateLimitRetryAfter(resp); retryAfter > 0 {
 					// Close response body to prevent resource leak
-					resp.Body.Close()
+					_ = resp.Body.Close()
 
 					if attempt < maxRetries {
 						time.Sleep(retryAfter)
@@ -89,7 +89,7 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 			// Handle other 5xx errors with exponential backoff
 			if resp.StatusCode >= 500 {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				if attempt < maxRetries {
 					backoffDuration := calculateBackoff(attempt)
 					time.Sleep(backoffDuration)
@@ -137,7 +137,7 @@ func getRateLimitRetryAfter(resp *http.Response) time.Duration {
 	// Check for X-RateLimit-Reset header
 	if resetTimeStr := resp.Header.Get("X-RateLimit-Reset"); resetTimeStr != "" {
 		if resetTime, err := strconv.ParseInt(resetTimeStr, 10, 64); err == nil {
-			resetDuration := time.Unix(resetTime, 0).Sub(time.Now())
+			resetDuration := time.Until(time.Unix(resetTime, 0))
 			if resetDuration > 0 {
 				// Add small buffer to avoid racing with reset
 				return resetDuration + (5 * time.Second)

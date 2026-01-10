@@ -55,58 +55,6 @@ func ConvertFieldFiltersToQueryString(filters []FieldFilter) string {
 	return strings.Join(parts, " ")
 }
 
-// parseQueryStringFilter parses GitHub's query string filter format
-//
-// Format: "field1:value1,value2 field2:value3"
-// Example: "type:Epic,Initiative quarter:FY26Q2"
-//
-// Rules:
-// - Space-separated field:value pairs
-// - Comma-separated values within a field
-// - Field names are capitalized as they appear
-func parseQueryStringFilter(filterString string) ([]FieldFilter, error) {
-	filterString = strings.TrimSpace(filterString)
-	if filterString == "" {
-		return []FieldFilter{}, nil
-	}
-
-	var filters []FieldFilter
-
-	// Split by spaces to get field:value pairs
-	pairs := strings.Fields(filterString)
-
-	for _, pair := range pairs {
-		// Split by first colon to separate field name and values
-		parts := strings.SplitN(pair, ":", 2)
-		if len(parts) != 2 {
-			// Skip malformed pairs
-			continue
-		}
-
-		fieldName := strings.TrimSpace(parts[0])
-		valuesStr := strings.TrimSpace(parts[1])
-
-		if fieldName == "" || valuesStr == "" {
-			continue
-		}
-
-		// Split values by comma
-		values := strings.Split(valuesStr, ",")
-
-		// Trim whitespace from each value
-		for i, v := range values {
-			values[i] = strings.TrimSpace(v)
-		}
-
-		filters = append(filters, FieldFilter{
-			FieldName: fieldName,
-			Values:    values,
-		})
-	}
-
-	return filters, nil
-}
-
 // MergeFilters combines view-based filters with additional user filters
 //
 // Strategy: View filters act as the base, user filters are added on top

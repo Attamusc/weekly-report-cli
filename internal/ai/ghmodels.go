@@ -3,12 +3,13 @@ package ai
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -96,10 +97,13 @@ func (c *GHModelsClient) getSystemPrompt() string {
 	return defaultSystemPrompt
 }
 
+// loggerContextKey is the context key for the logger
+type loggerContextKey struct{}
+
 // Summarize generates a summary for a single update using GitHub Models API
 func (c *GHModelsClient) Summarize(ctx context.Context, issueTitle, issueURL, updateText string) (string, error) {
 	// Get logger from context if available
-	logger, ok := ctx.Value("logger").(*slog.Logger)
+	logger, ok := ctx.Value(loggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
@@ -112,7 +116,7 @@ func (c *GHModelsClient) Summarize(ctx context.Context, issueTitle, issueURL, up
 // SummarizeMany generates a summary for multiple updates using GitHub Models API
 func (c *GHModelsClient) SummarizeMany(ctx context.Context, issueTitle, issueURL string, updates []string) (string, error) {
 	// Get logger from context if available
-	logger, ok := ctx.Value("logger").(*slog.Logger)
+	logger, ok := ctx.Value(loggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
@@ -130,7 +134,7 @@ func (c *GHModelsClient) SummarizeMany(ctx context.Context, issueTitle, issueURL
 // callAPI makes the actual HTTP request to GitHub Models API with retry logic
 func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string) (string, error) {
 	// Get logger from context if available
-	logger, ok := ctx.Value("logger").(*slog.Logger)
+	logger, ok := ctx.Value(loggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
@@ -151,7 +155,9 @@ func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string) (string
 		if attempt > 0 {
 			// Apply jittered exponential backoff
 			delay := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
-			jitter := time.Duration(rand.Float64() * float64(delay) * 0.1) // 10% jitter
+			jitterMax := int64(float64(delay) * 0.1) // 10% jitter
+			jitterBig, _ := rand.Int(rand.Reader, big.NewInt(jitterMax+1))
+			jitter := time.Duration(jitterBig.Int64())
 			logger.Debug("AI API retry backoff", "attempt", attempt, "delay", delay+jitter)
 			select {
 			case <-ctx.Done():
@@ -223,7 +229,7 @@ func (c *GHModelsClient) makeHTTPRequest(ctx context.Context, request chatComple
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -355,7 +361,7 @@ func (c *GHModelsClient) parseMarkdownBatchResponse(response string, items []Bat
 // Implements chunking to avoid token limits
 func (c *GHModelsClient) SummarizeBatch(ctx context.Context, items []BatchItem) (map[string]string, error) {
 	// Get logger from context if available
-	logger, ok := ctx.Value("logger").(*slog.Logger)
+	logger, ok := ctx.Value(loggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}

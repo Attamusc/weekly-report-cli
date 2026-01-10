@@ -13,7 +13,7 @@ status report data using HTML comment markers, and generates markdown tables
 with optional AI summarization.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		// Default behavior - show help
-		cmd.Help()
+		_ = cmd.Help()
 	},
 }
 

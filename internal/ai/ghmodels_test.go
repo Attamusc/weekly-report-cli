@@ -217,7 +217,6 @@ func TestGHModelsClient_SummarizeMany(t *testing.T) {
 
 	ctx := context.Background()
 	result, err := client.SummarizeMany(ctx, "Multiple updates test", "https://github.com/test/repo/issues/1", updates)
-
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}
@@ -262,7 +261,6 @@ func TestGHModelsClient_RetryOnRateLimit(t *testing.T) {
 
 	ctx := context.Background()
 	result, err := client.Summarize(ctx, "Test", "https://github.com/test/repo/issues/1", "Update text")
-
 	if err != nil {
 		t.Errorf("Expected no error after retry, got %v", err)
 	}
@@ -304,7 +302,7 @@ func TestGHModelsClient_ContextCancellation(t *testing.T) {
 
 func TestGHModelsClient_CustomSystemPrompt(t *testing.T) {
 	customPrompt := "This is a custom prompt for testing purposes."
-	
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify request contains custom prompt
 		var request chatCompletionRequest
@@ -346,7 +344,6 @@ func TestGHModelsClient_CustomSystemPrompt(t *testing.T) {
 
 	ctx := context.Background()
 	result, err := client.Summarize(ctx, "Test Issue", "https://github.com/test/repo/issues/1", "Test update")
-
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}
@@ -395,7 +392,6 @@ func TestGHModelsClient_DefaultSystemPrompt(t *testing.T) {
 
 	ctx := context.Background()
 	result, err := client.Summarize(ctx, "Test Issue", "https://github.com/test/repo/issues/1", "Test update")
-
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}

@@ -74,7 +74,7 @@ func TestFetchIssue_Open(t *testing.T) {
 
 func TestFetchIssue_Closed(t *testing.T) {
 	closeTime := time.Date(2025, 8, 15, 12, 30, 0, 0, time.UTC)
-	
+
 	// Create test server that simulates GitHub API for closed issue
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
