@@ -56,6 +56,111 @@ go build -o weekly-report-cli .
 CGO_ENABLED=0 go build -ldflags="-s -w" -o weekly-report-cli .
 ```
 
+## GitHub Action
+
+Use `weekly-report-cli` directly in your GitHub Actions workflows without installing anything.
+
+### Basic Usage
+
+```yaml
+- uses: Attamusc/weekly-report-cli@v1
+  with:
+    github-token: ${{ secrets.GITHUB_TOKEN }}
+    project: 'org:my-org/5'
+    since-days: 7
+```
+
+### Full Example: Weekly Report to Slack
+
+```yaml
+name: Weekly Status Report
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 9 AM UTC
+  workflow_dispatch:
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Attamusc/weekly-report-cli@v1
+        id: report
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+          project: 'org:my-org/5'
+          project-view: 'Current Sprint'
+          since-days: 7
+
+      - name: Post report to Slack
+        uses: slackapi/slack-github-action@v1
+        with:
+          channel-id: 'C0123456789'
+          payload: |
+            {
+              "text": "Weekly Status Report",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${{ steps.report.outputs.report }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+      - name: Save report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-report
+          path: ${{ steps.report.outputs.report-file }}
+```
+
+### Action Inputs
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `github-token` | GitHub token with `repo` and `read:project` scopes | **Required** |
+| `version` | Version of weekly-report-cli to use | `latest` |
+| `project` | GitHub Project board URL or identifier | - |
+| `project-field` | Field name to filter by | - |
+| `project-field-values` | Comma-separated values to match | - |
+| `project-view` | GitHub project view name | - |
+| `project-view-id` | GitHub project view ID | - |
+| `project-include-prs` | Include pull requests | `false` |
+| `project-max-items` | Maximum items to fetch | `100` |
+| `input-file` | Path to file containing issue URLs | - |
+| `since-days` | Number of days to look back | `7` |
+| `concurrency` | Number of concurrent workers | `4` |
+| `no-notes` | Disable notes section | `false` |
+| `no-summary` | Disable AI summarization | `false` |
+| `summary-prompt` | Custom AI summarization prompt | - |
+| `verbose` | Enable verbose output | `false` |
+| `quiet` | Suppress all progress output | `false` |
+
+### Action Outputs
+
+| Output | Description |
+|--------|-------------|
+| `report` | The generated markdown report content |
+| `report-file` | Path to the report file |
+
+### Version Pinning
+
+```yaml
+# Use latest v1.x.x (recommended)
+uses: Attamusc/weekly-report-cli@v1
+
+# Use specific minor version
+uses: Attamusc/weekly-report-cli@v1.2
+
+# Use exact version
+uses: Attamusc/weekly-report-cli@v1.2.3
+```
+
 ## Configuration
 
 ### Environment Variables

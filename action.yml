@@ -1,0 +1,200 @@
+name: 'Weekly Report CLI'
+description: 'Generate weekly status reports from GitHub issues and project boards'
+author: 'Attamusc'
+branding:
+  icon: 'file-text'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'Version of weekly-report-cli to use (default: latest)'
+    required: false
+    default: 'latest'
+
+  github-token:
+    description: 'GitHub token with repo and read:project scopes'
+    required: true
+
+  # Generate command options
+  project:
+    description: 'GitHub Project board URL or identifier (e.g., "org:my-org/5")'
+    required: false
+
+  project-field:
+    description: 'Field name to filter by (default: Status)'
+    required: false
+
+  project-field-values:
+    description: 'Comma-separated values to match (default: In Progress,Done,Blocked)'
+    required: false
+
+  project-view:
+    description: 'GitHub project view name (e.g., "Blocked Items")'
+    required: false
+
+  project-view-id:
+    description: 'GitHub project view ID - takes precedence over project-view'
+    required: false
+
+  project-include-prs:
+    description: 'Include pull requests from project board (default: false)'
+    required: false
+    default: 'false'
+
+  project-max-items:
+    description: 'Maximum number of items to fetch from project board (default: 100)'
+    required: false
+    default: '100'
+
+  input-file:
+    description: 'Path to file containing issue URLs'
+    required: false
+
+  since-days:
+    description: 'Number of days to look back for reports (default: 7)'
+    required: false
+    default: '7'
+
+  concurrency:
+    description: 'Number of concurrent workers (default: 4)'
+    required: false
+    default: '4'
+
+  no-notes:
+    description: 'Disable notes section in output (default: false)'
+    required: false
+    default: 'false'
+
+  no-summary:
+    description: 'Disable AI summarization (default: false)'
+    required: false
+    default: 'false'
+
+  summary-prompt:
+    description: 'Custom prompt for AI summarization'
+    required: false
+
+  verbose:
+    description: 'Enable verbose output (default: false)'
+    required: false
+    default: 'false'
+
+  quiet:
+    description: 'Suppress all progress output (default: false)'
+    required: false
+    default: 'false'
+
+outputs:
+  report:
+    description: 'The generated markdown report'
+    value: ${{ steps.generate.outputs.report }}
+
+  report-file:
+    description: 'Path to the report file'
+    value: ${{ steps.generate.outputs.report-file }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install weekly-report-cli
+      id: install
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: ${{ github.action_path }}/scripts/install.sh
+
+    - name: Generate report
+      id: generate
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        DISABLE_SUMMARY: ${{ inputs.no-summary == 'true' && 'true' || '' }}
+      run: |
+        # Build command arguments
+        ARGS="generate"
+
+        # Project board options
+        if [ -n "${{ inputs.project }}" ]; then
+          ARGS="$ARGS --project '${{ inputs.project }}'"
+        fi
+
+        if [ -n "${{ inputs.project-field }}" ]; then
+          ARGS="$ARGS --project-field '${{ inputs.project-field }}'"
+        fi
+
+        if [ -n "${{ inputs.project-field-values }}" ]; then
+          ARGS="$ARGS --project-field-values '${{ inputs.project-field-values }}'"
+        fi
+
+        if [ -n "${{ inputs.project-view }}" ]; then
+          ARGS="$ARGS --project-view '${{ inputs.project-view }}'"
+        fi
+
+        if [ -n "${{ inputs.project-view-id }}" ]; then
+          ARGS="$ARGS --project-view-id '${{ inputs.project-view-id }}'"
+        fi
+
+        if [ "${{ inputs.project-include-prs }}" = "true" ]; then
+          ARGS="$ARGS --project-include-prs"
+        fi
+
+        ARGS="$ARGS --project-max-items ${{ inputs.project-max-items }}"
+
+        # Input file
+        if [ -n "${{ inputs.input-file }}" ]; then
+          ARGS="$ARGS --input '${{ inputs.input-file }}'"
+        fi
+
+        # General options
+        ARGS="$ARGS --since-days ${{ inputs.since-days }}"
+        ARGS="$ARGS --concurrency ${{ inputs.concurrency }}"
+
+        if [ "${{ inputs.no-notes }}" = "true" ]; then
+          ARGS="$ARGS --no-notes"
+        fi
+
+        if [ -n "${{ inputs.summary-prompt }}" ]; then
+          ARGS="$ARGS --summary-prompt '${{ inputs.summary-prompt }}'"
+        fi
+
+        if [ "${{ inputs.verbose }}" = "true" ]; then
+          ARGS="$ARGS --verbose"
+        fi
+
+        if [ "${{ inputs.quiet }}" = "true" ]; then
+          ARGS="$ARGS --quiet"
+        fi
+
+        # Run and capture output
+        REPORT_FILE="${RUNNER_TEMP}/weekly-report.md"
+
+        echo "::group::Running weekly-report-cli"
+        echo "Command: weekly-report-cli $ARGS"
+
+        if eval "weekly-report-cli $ARGS" > "$REPORT_FILE" 2>&1; then
+          echo "Report generated successfully"
+        else
+          EXIT_CODE=$?
+          if [ $EXIT_CODE -eq 2 ]; then
+            echo "::warning::No report rows generated (exit code 2)"
+            echo "# No Report Data" > "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            echo "No issues with updates found in the specified time window." >> "$REPORT_FILE"
+          else
+            echo "::error::Report generation failed with exit code $EXIT_CODE"
+            cat "$REPORT_FILE"
+            exit $EXIT_CODE
+          fi
+        fi
+        echo "::endgroup::"
+
+        # Set outputs
+        echo "report-file=$REPORT_FILE" >> $GITHUB_OUTPUT
+
+        # Handle multiline output for report
+        {
+          echo 'report<<EOF'
+          cat "$REPORT_FILE"
+          echo 'EOF'
+        } >> $GITHUB_OUTPUT

@@ -1,0 +1,60 @@
+name: Update Version Tags
+
+# This workflow updates the floating version tags (v1, v1.2) to point to the latest
+# patch release. This allows users to reference @v1 to get the latest v1.x.x version.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  update-tags:
+    name: Update floating version tags
+    runs-on: ubuntu-latest
+    # Only run for non-prerelease versions
+    if: ${{ !github.event.release.prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update version tags
+        run: |
+          # Get version from the release tag (e.g., v1.2.3)
+          VERSION="${{ github.event.release.tag_name }}"
+          echo "Release version: $VERSION"
+
+          # Validate semantic version format
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::warning::Tag $VERSION does not match semantic version format (vX.Y.Z), skipping"
+            exit 0
+          fi
+
+          # Extract major and minor versions
+          MAJOR="${VERSION%%.*}"           # v1
+          MINOR="${VERSION%.*}"            # v1.2
+
+          echo "Major tag: $MAJOR"
+          echo "Minor tag: $MINOR"
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Delete local tags if they exist (to allow re-creation)
+          git tag -d "$MAJOR" 2>/dev/null || true
+          git tag -d "$MINOR" 2>/dev/null || true
+
+          # Create annotated tags pointing to the release commit
+          git tag -a "$MAJOR" -m "Release $VERSION" "${{ github.event.release.target_commitish }}"
+          git tag -a "$MINOR" -m "Release $VERSION" "${{ github.event.release.target_commitish }}"
+
+          # Force push the tags (overwrite existing remote tags)
+          git push origin "$MAJOR" --force
+          git push origin "$MINOR" --force
+
+          echo "::notice::Updated $MAJOR and $MINOR tags to point to $VERSION"
