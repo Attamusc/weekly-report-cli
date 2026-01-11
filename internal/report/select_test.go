@@ -226,3 +226,75 @@ func TestSelectReports_MixedValidAndInvalid(t *testing.T) {
 		t.Errorf("expected second report to be 'valid report', got '%s'", reports[1].TrendingRaw)
 	}
 }
+
+func TestSelectMostRecentComment(t *testing.T) {
+	tests := []struct {
+		name     string
+		comments []github.Comment
+		wantBody string
+		wantOK   bool
+	}{
+		{
+			name:     "empty comments",
+			comments: []github.Comment{},
+			wantBody: "",
+			wantOK:   false,
+		},
+		{
+			name: "single comment",
+			comments: []github.Comment{
+				{Body: "only comment", CreatedAt: time.Now(), URL: "url-1"},
+			},
+			wantBody: "only comment",
+			wantOK:   true,
+		},
+		{
+			name: "multiple comments returns most recent",
+			comments: []github.Comment{
+				{Body: "oldest comment", CreatedAt: time.Now().Add(-2 * time.Hour), URL: "url-1"},
+				{Body: "middle comment", CreatedAt: time.Now().Add(-1 * time.Hour), URL: "url-2"},
+				{Body: "newest comment", CreatedAt: time.Now(), URL: "url-3"},
+			},
+			wantBody: "newest comment",
+			wantOK:   true,
+		},
+		{
+			name: "most recent comment has empty body",
+			comments: []github.Comment{
+				{Body: "has content", CreatedAt: time.Now().Add(-1 * time.Hour), URL: "url-1"},
+				{Body: "", CreatedAt: time.Now(), URL: "url-2"},
+			},
+			wantBody: "",
+			wantOK:   false,
+		},
+		{
+			name: "most recent comment is whitespace only",
+			comments: []github.Comment{
+				{Body: "has content", CreatedAt: time.Now().Add(-1 * time.Hour), URL: "url-1"},
+				{Body: "   \n\t  ", CreatedAt: time.Now(), URL: "url-2"},
+			},
+			wantBody: "",
+			wantOK:   false,
+		},
+		{
+			name: "trims whitespace from body",
+			comments: []github.Comment{
+				{Body: "  trimmed content  \n", CreatedAt: time.Now(), URL: "url-1"},
+			},
+			wantBody: "trimmed content",
+			wantOK:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body, ok := SelectMostRecentComment(tc.comments)
+			if ok != tc.wantOK {
+				t.Errorf("SelectMostRecentComment() ok = %t, want %t", ok, tc.wantOK)
+			}
+			if body != tc.wantBody {
+				t.Errorf("SelectMostRecentComment() body = %q, want %q", body, tc.wantBody)
+			}
+		})
+	}
+}

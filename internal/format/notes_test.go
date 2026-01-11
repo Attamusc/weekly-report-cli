@@ -90,6 +90,41 @@ func TestRenderNotes(t *testing.T) {
 - https://github.com/owner/repo/issues/2: multiple structured updates in last 1 day
 `,
 		},
+		{
+			name: "unstructured fallback note",
+			notes: []Note{
+				{
+					Kind:     NoteUnstructuredFallback,
+					IssueURL: "https://github.com/owner/repo/issues/42",
+				},
+			},
+			expected: "## Notes\n\n- https://github.com/owner/repo/issues/42: no structured update found \u2014 summary derived from most recent comment\n",
+		},
+		{
+			name: "mixed notes including unstructured fallback",
+			notes: []Note{
+				{
+					Kind:      NoteMultipleUpdates,
+					IssueURL:  "https://github.com/owner/repo/issues/1",
+					SinceDays: 7,
+				},
+				{
+					Kind:     NoteUnstructuredFallback,
+					IssueURL: "https://github.com/owner/repo/issues/2",
+				},
+				{
+					Kind:      NoteNoUpdatesInWindow,
+					IssueURL:  "https://github.com/owner/repo/issues/3",
+					SinceDays: 14,
+				},
+			},
+			expected: `## Notes
+
+- https://github.com/owner/repo/issues/1: multiple structured updates in last 7 days
+- https://github.com/owner/repo/issues/2: no structured update found` + " \u2014 " + `summary derived from most recent comment
+- https://github.com/owner/repo/issues/3: no update in last 14 days
+`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -144,6 +179,14 @@ func TestRenderNoteBullet(t *testing.T) {
 				SinceDays: 1,
 			},
 			expected: "https://github.com/owner/repo/issues/2: no update in last 1 day",
+		},
+		{
+			name: "unstructured fallback",
+			note: Note{
+				Kind:     NoteUnstructuredFallback,
+				IssueURL: "https://github.com/owner/repo/issues/42",
+			},
+			expected: "https://github.com/owner/repo/issues/42: no structured update found \u2014 summary derived from most recent comment",
 		},
 		{
 			name: "unknown note kind",
@@ -226,6 +269,7 @@ func TestHasNotesOfKind(t *testing.T) {
 		{Kind: NoteMultipleUpdates, IssueURL: "url1", SinceDays: 7},
 		{Kind: NoteNoUpdatesInWindow, IssueURL: "url2", SinceDays: 14},
 		{Kind: NoteMultipleUpdates, IssueURL: "url3", SinceDays: 3},
+		{Kind: NoteUnstructuredFallback, IssueURL: "url4"},
 	}
 
 	tests := []struct {
@@ -244,6 +288,12 @@ func TestHasNotesOfKind(t *testing.T) {
 			name:     "has no updates",
 			notes:    notes,
 			kind:     NoteNoUpdatesInWindow,
+			expected: true,
+		},
+		{
+			name:     "has unstructured fallback",
+			notes:    notes,
+			kind:     NoteUnstructuredFallback,
 			expected: true,
 		},
 		{

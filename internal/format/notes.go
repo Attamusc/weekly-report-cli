@@ -13,6 +13,9 @@ const (
 	NoteMultipleUpdates NoteKind = iota
 	// NoteNoUpdatesInWindow indicates no updates were found within the time window
 	NoteNoUpdatesInWindow
+	// NoteUnstructuredFallback indicates the summary was derived from the most recent
+	// comment rather than a structured report
+	NoteUnstructuredFallback
 )
 
 // Note represents a note entry about an issue's status reporting
@@ -60,6 +63,10 @@ func renderNoteBullet(note Note) string {
 		dayText := pluralizeDays(note.SinceDays)
 		return fmt.Sprintf("%s: no update in last %s",
 			note.IssueURL, dayText)
+
+	case NoteUnstructuredFallback:
+		return fmt.Sprintf("%s: no structured update found — summary derived from most recent comment",
+			note.IssueURL)
 
 	default:
 		// Unknown note kind, return empty string

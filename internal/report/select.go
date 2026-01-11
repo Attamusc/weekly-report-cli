@@ -2,6 +2,7 @@ package report
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Attamusc/weekly-report-cli/internal/github"
@@ -31,4 +32,22 @@ func SelectReports(comments []github.Comment, since time.Time) []Report {
 	})
 
 	return reports
+}
+
+// SelectMostRecentComment returns the most recent comment body from the
+// provided comments, or ("", false) if no comments exist or the most recent
+// comment has an empty body. Comments from the GitHub API are chronological
+// (oldest first), so the last element is the most recent.
+func SelectMostRecentComment(comments []github.Comment) (string, bool) {
+	if len(comments) == 0 {
+		return "", false
+	}
+
+	newest := comments[len(comments)-1]
+	body := strings.TrimSpace(newest.Body)
+	if body == "" {
+		return "", false
+	}
+
+	return body, true
 }

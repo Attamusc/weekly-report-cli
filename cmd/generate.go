@@ -515,8 +515,19 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 			result.ShouldSummarize = true
 			result.UpdateTexts = []string{issueData.CloseReason}
 			result.FallbackSummary = "Issue was closed"
+		} else if commentBody, ok := report.SelectMostRecentComment(comments); ok {
+			// Case 1 fallback: no structured reports but comments exist —
+			// use the most recent comment body for AI summarization
+			result.Status = derive.Unknown
+			result.UpdateTexts = []string{commentBody}
+			result.ShouldSummarize = true
+			result.FallbackSummary = commentBody
+			result.Note = &format.Note{
+				Kind:     format.NoteUnstructuredFallback,
+				IssueURL: ref.URL,
+			}
 		} else {
-			// Issue is open - needs update
+			// No comments at all - needs update
 			result.Status = derive.NeedsUpdate
 			result.ShouldSummarize = false
 			result.FallbackSummary = fmt.Sprintf("No update provided in last %d days", sinceDays)
@@ -554,8 +565,18 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 			result.ShouldSummarize = true
 			result.UpdateTexts = []string{issueData.CloseReason}
 			result.FallbackSummary = "Issue was closed"
+		} else if commentBody, ok := report.SelectMostRecentComment(comments); ok {
+			// Case 2a fallback: structured reports exist but have no update text —
+			// keep status and target date from report, use most recent comment body
+			result.UpdateTexts = []string{commentBody}
+			result.ShouldSummarize = true
+			result.FallbackSummary = commentBody
+			result.Note = &format.Note{
+				Kind:     format.NoteUnstructuredFallback,
+				IssueURL: ref.URL,
+			}
 		} else {
-			// Issue is open - needs update
+			// No comments at all - needs update
 			result.Status = derive.NeedsUpdate
 			result.ShouldSummarize = false
 			result.FallbackSummary = fmt.Sprintf("No structured update found in last %d days", sinceDays)
