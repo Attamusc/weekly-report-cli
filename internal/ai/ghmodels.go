@@ -82,6 +82,31 @@ Example response format:
   "https://github.com/org/repo/issues/2": "Team fixed critical race condition..."
 }`
 
+	describeSystemPrompt = `You are a technical writer summarizing GitHub issues for project documentation.
+
+You will receive a JSON object with an array of items, each containing:
+- id: A unique identifier (the issue URL)
+- issue: The issue title
+- body: The issue description/body text
+
+For each issue, extract and summarize:
+1. The main objective or goal of the project/feature
+2. Key deliverables or scope items
+3. Any important constraints or dependencies mentioned
+
+Respond with ONLY a valid JSON object where:
+- Keys are the item IDs (URLs) as strings
+- Values are the summaries (2-4 sentences, factual, third-person present tense)
+
+Focus on WHAT the project is about, not progress or status updates.
+Keep relevant markdown links intact. Do not add any prefatory text, explanation, or markdown code fences.
+
+Example response format:
+{
+  "https://github.com/org/repo/issues/1": "This project implements user authentication...",
+  "https://github.com/org/repo/issues/2": "The initiative aims to refactor the payment processing module..."
+}`
+
 	temperature    = 1 // gpt-5o-mini only supports temperature of 1
 	maxRetries     = 3
 	baseDelay      = 1 * time.Second
@@ -427,6 +452,170 @@ func (c *GHModelsClient) summarizeBatchChunked(ctx context.Context, items []Batc
 		// Merge results
 		for url, summary := range chunkSummaries {
 			result[url] = summary
+		}
+	}
+
+	return result, nil
+}
+
+// describeRequestItem represents a single item in a describe batch request
+type describeRequestItem struct {
+	ID    string `json:"id"`
+	Issue string `json:"issue"`
+	Body  string `json:"body"`
+}
+
+// describeRequest represents the structure sent to the API for batch description
+type describeRequest struct {
+	Items []describeRequestItem `json:"items"`
+}
+
+// buildDescribePrompt creates a JSON prompt for batch description
+func (c *GHModelsClient) buildDescribePrompt(items []DescribeBatchItem) (string, error) {
+	req := describeRequest{
+		Items: make([]describeRequestItem, len(items)),
+	}
+
+	for i, item := range items {
+		req.Items[i] = describeRequestItem{
+			ID:    item.IssueURL,
+			Issue: item.IssueTitle,
+			Body:  item.IssueBody,
+		}
+	}
+
+	jsonBytes, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal describe request: %w", err)
+	}
+
+	return string(jsonBytes), nil
+}
+
+// DescribeBatch generates project/goal summaries for issue descriptions
+// Implements chunking to avoid token limits
+func (c *GHModelsClient) DescribeBatch(ctx context.Context, items []DescribeBatchItem) (map[string]string, error) {
+	// Get logger from context if available
+	logger, ok := ctx.Value(loggerContextKey{}).(*slog.Logger)
+	if !ok {
+		logger = slog.Default()
+	}
+
+	if len(items) == 0 {
+		return map[string]string{}, nil
+	}
+
+	// If we have more than maxBatchSize items, chunk them
+	if len(items) > maxBatchSize {
+		logger.Debug("Splitting describe batch into chunks", "totalItems", len(items), "chunkSize", maxBatchSize)
+		return c.describeBatchChunked(ctx, items, logger)
+	}
+
+	logger.Debug("AI batch describing", "model", c.Model, "items", len(items))
+
+	// Build the prompt
+	userPrompt, err := c.buildDescribePrompt(items)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build describe prompt: %w", err)
+	}
+
+	// Use custom system prompt for describe mode
+	originalPrompt := c.SystemPrompt
+	c.SystemPrompt = describeSystemPrompt
+	defer func() { c.SystemPrompt = originalPrompt }()
+
+	// Call API
+	response, err := c.callAPI(ctx, userPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("describe API call failed: %w", err)
+	}
+
+	// Parse response (reuse the same parsing logic as SummarizeBatch)
+	summaries, err := c.parseDescribeResponse(response, items)
+	if err != nil {
+		logger.Debug("Failed to parse describe response", "error", err)
+		return nil, err
+	}
+
+	logger.Debug("Batch description succeeded", "summaries", len(summaries))
+	return summaries, nil
+}
+
+// parseDescribeResponse attempts to parse the API response as JSON
+// Returns a map of issueURL -> description
+func (c *GHModelsClient) parseDescribeResponse(response string, items []DescribeBatchItem) (map[string]string, error) {
+	// Try to parse as JSON first
+	var jsonResponse map[string]string
+	if err := json.Unmarshal([]byte(response), &jsonResponse); err == nil {
+		// Successfully parsed JSON
+		return jsonResponse, nil
+	}
+
+	// JSON parsing failed - try markdown fallback
+	return c.parseMarkdownDescribeResponse(response, items)
+}
+
+// parseMarkdownDescribeResponse parses a markdown-formatted describe response
+func (c *GHModelsClient) parseMarkdownDescribeResponse(response string, items []DescribeBatchItem) (map[string]string, error) {
+	result := make(map[string]string)
+
+	// Split by "## SUMMARY" or "## DESCRIPTION" markers
+	parts := strings.Split(response, "## ")
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// Find the URL and extract the description
+		lines := strings.SplitN(part, "\n", 2)
+		if len(lines) < 2 {
+			continue
+		}
+
+		// First line should contain the URL or marker
+		urlLine := strings.TrimSpace(lines[0])
+		description := strings.TrimSpace(lines[1])
+
+		// Try to find a matching URL from our items
+		for _, item := range items {
+			if strings.Contains(urlLine, item.IssueURL) {
+				result[item.IssueURL] = description
+				break
+			}
+		}
+	}
+
+	// If we didn't parse any descriptions, return error
+	if len(result) == 0 {
+		return nil, fmt.Errorf("failed to parse describe response in both JSON and markdown formats")
+	}
+
+	return result, nil
+}
+
+// describeBatchChunked splits items into chunks and processes them sequentially
+func (c *GHModelsClient) describeBatchChunked(ctx context.Context, items []DescribeBatchItem, logger *slog.Logger) (map[string]string, error) {
+	result := make(map[string]string)
+
+	for i := 0; i < len(items); i += maxBatchSize {
+		end := i + maxBatchSize
+		if end > len(items) {
+			end = len(items)
+		}
+
+		chunk := items[i:end]
+		logger.Debug("Processing describe chunk", "chunk", i/maxBatchSize+1, "items", len(chunk))
+
+		chunkDescriptions, err := c.DescribeBatch(ctx, chunk)
+		if err != nil {
+			return nil, fmt.Errorf("describe chunk %d failed: %w", i/maxBatchSize+1, err)
+		}
+
+		// Merge results
+		for url, description := range chunkDescriptions {
+			result[url] = description
 		}
 	}
 

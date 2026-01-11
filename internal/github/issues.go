@@ -29,6 +29,9 @@ type IssueData struct {
 	URL         string
 	Title       string
 	State       string     // "open" or "closed"
+	Body        string     // Issue body/description
+	Labels      []string   // Issue labels
+	Assignees   []string   // Issue assignees (usernames)
 	ClosedAt    *time.Time // When the issue was closed (nil if open)
 	CloseReason string     // Text from the closing comment (empty if no comment or open issue)
 }
@@ -65,10 +68,25 @@ func FetchIssue(ctx context.Context, client *github.Client, ref input.IssueRef) 
 
 	logger.Debug("Issue metadata fetched successfully", "issue", ref.String(), "title", issue.GetTitle())
 
+	// Extract labels
+	var labels []string
+	for _, label := range issue.Labels {
+		labels = append(labels, label.GetName())
+	}
+
+	// Extract assignees
+	var assignees []string
+	for _, assignee := range issue.Assignees {
+		assignees = append(assignees, assignee.GetLogin())
+	}
+
 	issueData := IssueData{
-		URL:   issue.GetHTMLURL(),
-		Title: issue.GetTitle(),
-		State: issue.GetState(),
+		URL:       issue.GetHTMLURL(),
+		Title:     issue.GetTitle(),
+		State:     issue.GetState(),
+		Body:      issue.GetBody(),
+		Labels:    labels,
+		Assignees: assignees,
 	}
 
 	// If issue is closed, get additional closing information
