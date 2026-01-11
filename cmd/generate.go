@@ -183,6 +183,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	// Setup logging
 	logger := setupLogger(cfg)
 	ctx = context.WithValue(ctx, github.LoggerContextKey{}, logger)
+	ctx = context.WithValue(ctx, "logger", logger) // Also add with string key for resolver/projects packages
 
 	// Initialize project client if needed
 	var projectClient *projectClientAdapter
@@ -214,7 +215,9 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(issueRefs) == 0 {
-		fmt.Fprintf(os.Stderr, "No valid GitHub issue URLs found\n")
+		if !cfg.Quiet {
+			fmt.Fprintf(os.Stderr, "No valid GitHub issue URLs found\n")
+		}
 		os.Exit(2) // Exit code 2 for no rows produced
 	}
 
@@ -281,7 +284,9 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	for result := range dataResults {
 		if result.Err != nil {
 			errorCount++
-			fmt.Fprintf(os.Stderr, "Error collecting data for issue: %v\n", result.Err)
+			if !cfg.Quiet {
+				fmt.Fprintf(os.Stderr, "Error collecting data for issue: %v\n", result.Err)
+			}
 			logger.Debug("Error collecting issue data", "error", result.Err)
 			continue
 		}
@@ -335,7 +340,9 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 
 	// Generate output
 	if len(rows) == 0 {
-		fmt.Fprintf(os.Stderr, "No report rows generated\n")
+		if !cfg.Quiet {
+			fmt.Fprintf(os.Stderr, "No report rows generated\n")
+		}
 		os.Exit(2) // Exit code 2 for no rows produced
 	}
 
