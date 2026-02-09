@@ -15,75 +15,17 @@ import (
 	"github.com/Attamusc/weekly-report-cli/internal/format"
 	"github.com/Attamusc/weekly-report-cli/internal/github"
 	"github.com/Attamusc/weekly-report-cli/internal/input"
-	"github.com/Attamusc/weekly-report-cli/internal/projects"
 	"github.com/Attamusc/weekly-report-cli/internal/report"
 	githubapi "github.com/google/go-github/v66/github"
 	"github.com/spf13/cobra"
 )
-
-// projectClientAdapter adapts the projects.Client to the input.ProjectClient interface
-// This avoids circular dependencies between packages
-type projectClientAdapter struct {
-	token  string
-	logger *slog.Logger
-}
-
-// FetchProjectItems implements input.ProjectClient interface
-func (a *projectClientAdapter) FetchProjectItems(ctx context.Context, configInterface interface{}) ([]input.IssueRef, error) {
-	// Convert the resolver config to project config
-	resolverCfg, ok := configInterface.(input.ResolverConfig)
-	if !ok {
-		return nil, fmt.Errorf("invalid config type for project client")
-	}
-
-	// Parse project URL
-	projectRef, err := projects.ParseProjectURL(resolverCfg.ProjectURL)
-	if err != nil {
-		return nil, fmt.Errorf("invalid project URL: %w", err)
-	}
-
-	// Create project config
-	projectCfg := projects.ProjectConfig{
-		Ref:      projectRef,
-		ViewName: resolverCfg.ProjectView,
-		ViewID:   resolverCfg.ProjectViewID,
-		FieldFilters: []projects.FieldFilter{
-			{
-				FieldName: resolverCfg.ProjectFieldName,
-				Values:    resolverCfg.ProjectFieldValues,
-			},
-		},
-		IncludePRs: resolverCfg.ProjectIncludePRs,
-		MaxItems:   resolverCfg.ProjectMaxItems,
-	}
-
-	// Create projects client and fetch items
-	// Note: FetchProjectItems now handles view filter resolution and applies all filters internally
-	client := projects.NewClient(a.token)
-	projectItems, err := client.FetchProjectItems(ctx, projectCfg)
-	if err != nil {
-		return nil, err
-	}
-
-	// Extract issue refs from filtered items
-	// Note: Filtering is already done in FetchProjectItems (including view filters)
-	var issueRefs []input.IssueRef
-	for _, item := range projectItems {
-		if item.IssueRef != nil {
-			issueRefs = append(issueRefs, *item.IssueRef)
-		}
-	}
-
-	a.logger.Info("Project items fetched and filtered", "project", projectRef.String(), "items", len(issueRefs))
-
-	return issueRefs, nil
-}
 
 var (
 	sinceDays     int
 	inputPath     string
 	concurrency   int
 	noNotes       bool
+	noSentiment   bool
 	verbose       bool
 	quiet         bool
 	summaryPrompt string
@@ -97,6 +39,9 @@ var (
 	projectView        string // NEW: View name
 	projectViewID      string // NEW: View ID
 )
+
+// summaryCompleted is the default summary for done/closed issues that don't need AI summarization.
+const summaryCompleted = "Completed"
 
 var generateCmd = &cobra.Command{
 	Use:   "generate",
@@ -151,6 +96,7 @@ func init() {
 	generateCmd.Flags().StringVar(&inputPath, "input", "", "Input file path (default: stdin)")
 	generateCmd.Flags().IntVar(&concurrency, "concurrency", 4, "Number of concurrent workers")
 	generateCmd.Flags().BoolVar(&noNotes, "no-notes", false, "Disable notes section in output")
+	generateCmd.Flags().BoolVar(&noSentiment, "no-sentiment", false, "Disable AI sentiment analysis")
 	generateCmd.Flags().BoolVar(&verbose, "verbose", false, "Enable verbose progress output")
 	generateCmd.Flags().BoolVar(&quiet, "quiet", false, "Suppress all progress output")
 	generateCmd.Flags().StringVar(&summaryPrompt, "summary-prompt", "", "Custom prompt for AI summarization (uses default if empty)")
@@ -175,15 +121,14 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load configuration
-	cfg, err := config.FromEnvAndFlags(sinceDays, concurrency, noNotes, verbose, quiet, inputPath, summaryPrompt, projectURL, projectField, projectFieldValuesList, projectIncludePRs, projectMaxItems, projectView, projectViewID)
+	cfg, err := config.FromEnvAndFlags(sinceDays, concurrency, noNotes, verbose, quiet, inputPath, summaryPrompt, projectURL, projectField, projectFieldValuesList, projectIncludePRs, projectMaxItems, projectView, projectViewID, noSentiment)
 	if err != nil {
 		return fmt.Errorf("configuration error: %w", err)
 	}
 
 	// Setup logging
 	logger := setupLogger(cfg)
-	ctx = context.WithValue(ctx, github.LoggerContextKey{}, logger)
-	ctx = context.WithValue(ctx, "logger", logger) // Also add with string key for resolver/projects packages
+	ctx = context.WithValue(ctx, input.LoggerContextKey{}, logger)
 
 	// Initialize project client if needed
 	var projectClient *projectClientAdapter
@@ -228,14 +173,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	githubClient := github.New(ctx, cfg.GitHubToken)
 
 	// Initialize summarizer based on configuration
-	var summarizer ai.Summarizer
-	if cfg.Models.Enabled {
-		logger.Debug("AI summarization enabled", "model", cfg.Models.Model)
-		summarizer = ai.NewGHModelsClient(cfg.Models.BaseURL, cfg.Models.Model, cfg.GitHubToken, cfg.Models.SystemPrompt)
-	} else {
-		logger.Debug("AI summarization disabled")
-		summarizer = ai.NewNoopSummarizer()
-	}
+	summarizer := initSummarizer(cfg, logger)
 
 	// Calculate time window
 	since := time.Now().AddDate(0, 0, -cfg.SinceDays)
@@ -300,26 +238,55 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// ========== PHASE B: Batch summarization (single API call) ==========
-	var summaries map[string]string
+	var batchResults map[string]ai.BatchResult
 	if cfg.Models.Enabled {
 		var err error
-		summaries, err = batchSummarize(ctx, summarizer, allData, logger)
+		batchResults, err = batchSummarize(ctx, summarizer, allData, logger)
 		if err != nil {
 			logger.Warn("Batch summarization failed, using fallbacks", "error", err)
-			summaries = make(map[string]string) // Empty map triggers fallback
+			batchResults = make(map[string]ai.BatchResult) // Empty map triggers fallback
 		}
 	} else {
 		logger.Debug("AI summarization disabled, using fallbacks")
-		summaries = make(map[string]string)
+		batchResults = make(map[string]ai.BatchResult)
 	}
 
 	// ========== PHASE C: Create final results ==========
+	rows, notes := assembleGenerateResults(allData, batchResults, cfg, logger)
+
+	// Generate output
+	renderGenerateOutput(rows, notes, cfg, logger)
+
+	return nil
+}
+
+// assembleGenerateResults creates rows and notes from collected data and batch AI results
+func assembleGenerateResults(allData []IssueData, batchResults map[string]ai.BatchResult, cfg *config.Config, logger *slog.Logger) ([]format.Row, []format.Note) {
 	logger.Info("Creating final results...")
 	var rows []format.Row
 	var notes []format.Note
 
 	for _, data := range allData {
-		summary := summaries[data.IssueURL]
+		var summary string
+
+		if result, ok := batchResults[data.IssueURL]; ok {
+			summary = result.Summary
+
+			// Check for sentiment mismatch (only if sentiment is enabled)
+			if cfg.Models.Sentiment && result.Sentiment != nil {
+				suggestedStatus, valid := derive.ParseStatusKey(result.Sentiment.SuggestedStatus)
+				if valid && suggestedStatus != data.Status {
+					notes = append(notes, format.Note{
+						Kind:            format.NoteSentimentMismatch,
+						IssueURL:        data.IssueURL,
+						ReportedStatus:  data.ReportedStatusCaption,
+						SuggestedStatus: suggestedStatus.Caption,
+						Explanation:     result.Sentiment.Explanation,
+					})
+				}
+			}
+		}
+
 		if summary == "" {
 			summary = data.FallbackSummary
 		}
@@ -337,8 +304,11 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	logger.Info("Results created successfully", "rows", len(rows), "notes", len(notes))
+	return rows, notes
+}
 
-	// Generate output
+// renderGenerateOutput sorts, renders, and prints the report output
+func renderGenerateOutput(rows []format.Row, notes []format.Note, cfg *config.Config, logger *slog.Logger) {
 	if len(rows) == 0 {
 		if !cfg.Quiet {
 			fmt.Fprintf(os.Stderr, "No report rows generated\n")
@@ -363,35 +333,6 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	logger.Info("Report generated successfully", "rows", len(rows), "notes", len(notes))
-
-	return nil
-}
-
-// setupLogger creates a logger configured for progress output
-func setupLogger(cfg *config.Config) *slog.Logger {
-	if cfg.Quiet {
-		// Discard all log output when quiet
-		return slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), &slog.HandlerOptions{
-			Level: slog.LevelError + 1, // Higher than any log level to discard all
-		}))
-	}
-
-	level := slog.LevelInfo
-	if cfg.Verbose {
-		level = slog.LevelDebug
-	}
-
-	// Use stderr for progress so stdout stays clean for output
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: level,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			// Remove time stamps for cleaner progress output
-			if a.Key == slog.TimeKey {
-				return slog.Attr{}
-			}
-			return a
-		},
-	}))
 }
 
 // IssueResult represents the result of processing a single issue
@@ -404,18 +345,19 @@ type IssueResult struct {
 
 // IssueData represents collected data from an issue before AI summarization
 type IssueData struct {
-	IssueURL        string
-	IssueTitle      string
-	IssueState      string
-	ClosedAt        *time.Time
-	CloseReason     string
-	Reports         []report.Report
-	UpdateTexts     []string // Raw updates (newest first)
-	Status          derive.Status
-	TargetDate      *time.Time
-	ShouldSummarize bool         // Whether this needs AI summarization
-	FallbackSummary string       // Used if AI fails or not needed
-	Note            *format.Note // Note to include in output
+	IssueURL              string
+	IssueTitle            string
+	IssueState            string
+	ClosedAt              *time.Time
+	CloseReason           string
+	Reports               []report.Report
+	UpdateTexts           []string // Raw updates (newest first)
+	Status                derive.Status
+	ReportedStatusCaption string // Original status caption for sentiment comparison
+	TargetDate            *time.Time
+	ShouldSummarize       bool         // Whether this needs AI summarization
+	FallbackSummary       string       // Used if AI fails or not needed
+	Note                  *format.Note // Note to include in output
 }
 
 // IssueDataResult represents the result of collecting issue data
@@ -443,29 +385,30 @@ func createResultFromData(data IssueData, summary string) IssueResult {
 }
 
 // batchSummarize summarizes all collected issue data in a single API call
-func batchSummarize(ctx context.Context, summarizer ai.Summarizer, allData []IssueData, logger *slog.Logger) (map[string]string, error) {
+func batchSummarize(ctx context.Context, summarizer ai.Summarizer, allData []IssueData, logger *slog.Logger) (map[string]ai.BatchResult, error) {
 	// Collect items that need summarization
 	var batchItems []ai.BatchItem
 	for _, data := range allData {
 		if data.ShouldSummarize && len(data.UpdateTexts) > 0 {
 			batchItems = append(batchItems, ai.BatchItem{
-				IssueURL:    data.IssueURL,
-				IssueTitle:  data.IssueTitle,
-				UpdateTexts: data.UpdateTexts,
+				IssueURL:       data.IssueURL,
+				IssueTitle:     data.IssueTitle,
+				UpdateTexts:    data.UpdateTexts,
+				ReportedStatus: data.ReportedStatusCaption,
 			})
 		}
 	}
 
 	if len(batchItems) == 0 {
 		logger.Debug("No items need summarization")
-		return map[string]string{}, nil
+		return map[string]ai.BatchResult{}, nil
 	}
 
 	logger.Info("Batch summarizing updates", "count", len(batchItems))
 	summaries, err := summarizer.SummarizeBatch(ctx, batchItems)
 	if err != nil {
 		logger.Warn("Batch summarization failed", "error", err)
-		return map[string]string{}, err
+		return map[string]ai.BatchResult{}, err
 	}
 
 	logger.Info("Batch summarization completed", "summaries", len(summaries))
@@ -475,7 +418,7 @@ func batchSummarize(ctx context.Context, summarizer ai.Summarizer, allData []Iss
 // collectIssueData fetches GitHub data and extracts reports without AI summarization
 func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.IssueRef, since time.Time, sinceDays int) (IssueData, error) {
 	// Get logger from context
-	logger, ok := ctx.Value(github.LoggerContextKey{}).(*slog.Logger)
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
@@ -509,16 +452,17 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 	// Case 1: No reports found
 	if len(reports) == 0 {
 		if issueData.State == github.StateClosed {
-			// Issue is closed - use Done status
+			// Issue is closed - use Done status, no AI needed
 			result.Status = derive.Done
+			result.ReportedStatusCaption = derive.Done.Caption
 			result.TargetDate = issueData.ClosedAt
-			result.ShouldSummarize = true
-			result.UpdateTexts = []string{issueData.CloseReason}
-			result.FallbackSummary = "Issue was closed"
+			result.ShouldSummarize = false
+			result.FallbackSummary = summaryCompleted
 		} else if commentBody, ok := report.SelectMostRecentComment(comments); ok {
 			// Case 1 fallback: no structured reports but comments exist —
 			// use the most recent comment body for AI summarization
 			result.Status = derive.Unknown
+			result.ReportedStatusCaption = derive.Unknown.Caption
 			result.UpdateTexts = []string{commentBody}
 			result.ShouldSummarize = true
 			result.FallbackSummary = commentBody
@@ -529,6 +473,7 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 		} else {
 			// No comments at all - needs update
 			result.Status = derive.NeedsUpdate
+			result.ReportedStatusCaption = derive.NeedsUpdate.Caption
 			result.ShouldSummarize = false
 			result.FallbackSummary = fmt.Sprintf("No update provided in last %d days", sinceDays)
 			result.Note = &format.Note{
@@ -552,19 +497,20 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 	// Use newest report for status and target date
 	newestReport := reports[0]
 	result.Status = derive.MapTrending(newestReport.TrendingRaw)
+	result.ReportedStatusCaption = result.Status.Caption
 	result.TargetDate = derive.ParseTargetDate(newestReport.TargetDate)
 
 	// Case 2a: Reports exist but no update text
 	if len(updateTexts) == 0 {
 		if issueData.State == github.StateClosed {
-			// Issue is closed - use Done status
+			// Issue is closed - use Done status, no AI needed
 			result.Status = derive.Done
+			result.ReportedStatusCaption = derive.Done.Caption
 			if result.TargetDate == nil {
 				result.TargetDate = issueData.ClosedAt
 			}
-			result.ShouldSummarize = true
-			result.UpdateTexts = []string{issueData.CloseReason}
-			result.FallbackSummary = "Issue was closed"
+			result.ShouldSummarize = false
+			result.FallbackSummary = summaryCompleted
 		} else if commentBody, ok := report.SelectMostRecentComment(comments); ok {
 			// Case 2a fallback: structured reports exist but have no update text —
 			// keep status and target date from report, use most recent comment body
@@ -578,6 +524,7 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 		} else {
 			// No comments at all - needs update
 			result.Status = derive.NeedsUpdate
+			result.ReportedStatusCaption = derive.NeedsUpdate.Caption
 			result.ShouldSummarize = false
 			result.FallbackSummary = fmt.Sprintf("No structured update found in last %d days", sinceDays)
 			result.Note = &format.Note{
@@ -589,9 +536,20 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 		return result, nil
 	}
 
-	// Case 2b: Reports with update text - needs summarization
-	result.ShouldSummarize = true
-	result.FallbackSummary = updateTexts[0] // Use newest update as fallback
+	// Case 2b: Reports with update text
+	if result.Status == derive.Done || issueData.State == github.StateClosed {
+		// Done or closed issues don't need AI summarization
+		if issueData.State == github.StateClosed {
+			result.Status = derive.Done
+			result.ReportedStatusCaption = derive.Done.Caption
+		}
+		result.ShouldSummarize = false
+		result.FallbackSummary = summaryCompleted
+	} else {
+		// Active issues need summarization
+		result.ShouldSummarize = true
+		result.FallbackSummary = updateTexts[0] // Use newest update as fallback
+	}
 
 	// Add note if multiple reports
 	if len(reports) >= 2 {

@@ -13,44 +13,66 @@ func TestGHModelsClient_SummarizeBatch(t *testing.T) {
 	tests := []struct {
 		name           string
 		items          []BatchItem
-		responseJSON   map[string]string
+		responseBody   string // Raw JSON response the mock server returns
 		expectError    bool
-		validateResult func(t *testing.T, result map[string]string)
+		validateResult func(t *testing.T, result map[string]BatchResult)
 	}{
 		{
-			name: "successful batch with JSON response",
+			name: "successful batch with nested JSON response",
 			items: []BatchItem{
 				{
-					IssueURL:    "https://github.com/org/repo/issues/1",
-					IssueTitle:  "Feature A",
-					UpdateTexts: []string{"Implemented feature A"},
+					IssueURL:       "https://github.com/org/repo/issues/1",
+					IssueTitle:     "Feature A",
+					UpdateTexts:    []string{"Implemented feature A"},
+					ReportedStatus: "On Track",
 				},
 				{
-					IssueURL:    "https://github.com/org/repo/issues/2",
-					IssueTitle:  "Bug B",
-					UpdateTexts: []string{"Fixed bug B"},
+					IssueURL:       "https://github.com/org/repo/issues/2",
+					IssueTitle:     "Bug B",
+					UpdateTexts:    []string{"Fixed bug B"},
+					ReportedStatus: "On Track",
 				},
 			},
-			responseJSON: map[string]string{
-				"https://github.com/org/repo/issues/1": "Team implemented feature A successfully",
-				"https://github.com/org/repo/issues/2": "Team fixed bug B in the system",
-			},
-			expectError: false,
-			validateResult: func(t *testing.T, result map[string]string) {
-				if len(result) != 2 {
-					t.Errorf("Expected 2 summaries, got %d", len(result))
+			responseBody: `{
+				"https://github.com/org/repo/issues/1": {
+					"summary": "Team implemented feature A successfully",
+					"sentiment": null
+				},
+				"https://github.com/org/repo/issues/2": {
+					"summary": "Team fixed bug B in the system",
+					"sentiment": {
+						"status": "at_risk",
+						"explanation": "Update mentions remaining test failures."
+					}
 				}
-				if !strings.Contains(result["https://github.com/org/repo/issues/1"], "feature A") {
-					t.Errorf("Summary for issue 1 doesn't mention feature A")
+			}`,
+			expectError: false,
+			validateResult: func(t *testing.T, result map[string]BatchResult) {
+				if len(result) != 2 {
+					t.Errorf("Expected 2 results, got %d", len(result))
+				}
+				r1 := result["https://github.com/org/repo/issues/1"]
+				if !strings.Contains(r1.Summary, "feature A") {
+					t.Errorf("Summary for issue 1 doesn't mention feature A: %s", r1.Summary)
+				}
+				if r1.Sentiment != nil {
+					t.Errorf("Expected nil sentiment for issue 1, got %+v", r1.Sentiment)
+				}
+				r2 := result["https://github.com/org/repo/issues/2"]
+				if r2.Sentiment == nil {
+					t.Fatalf("Expected non-nil sentiment for issue 2")
+				}
+				if r2.Sentiment.SuggestedStatus != "at_risk" {
+					t.Errorf("Expected suggested status at_risk, got %s", r2.Sentiment.SuggestedStatus)
 				}
 			},
 		},
 		{
 			name:         "empty batch",
 			items:        []BatchItem{},
-			responseJSON: map[string]string{},
+			responseBody: `{}`,
 			expectError:  false,
-			validateResult: func(t *testing.T, result map[string]string) {
+			validateResult: func(t *testing.T, result map[string]BatchResult) {
 				if len(result) != 0 {
 					t.Errorf("Expected empty result for empty batch, got %d items", len(result))
 				}
@@ -60,18 +82,22 @@ func TestGHModelsClient_SummarizeBatch(t *testing.T) {
 			name: "single item batch",
 			items: []BatchItem{
 				{
-					IssueURL:    "https://github.com/org/repo/issues/1",
-					IssueTitle:  "Feature A",
-					UpdateTexts: []string{"Implemented feature A", "Added tests"},
+					IssueURL:       "https://github.com/org/repo/issues/1",
+					IssueTitle:     "Feature A",
+					UpdateTexts:    []string{"Implemented feature A", "Added tests"},
+					ReportedStatus: "On Track",
 				},
 			},
-			responseJSON: map[string]string{
-				"https://github.com/org/repo/issues/1": "Team implemented feature A and added tests",
-			},
+			responseBody: `{
+				"https://github.com/org/repo/issues/1": {
+					"summary": "Team implemented feature A and added tests",
+					"sentiment": null
+				}
+			}`,
 			expectError: false,
-			validateResult: func(t *testing.T, result map[string]string) {
+			validateResult: func(t *testing.T, result map[string]BatchResult) {
 				if len(result) != 1 {
-					t.Errorf("Expected 1 summary, got %d", len(result))
+					t.Errorf("Expected 1 result, got %d", len(result))
 				}
 			},
 		},
@@ -93,23 +119,22 @@ func TestGHModelsClient_SummarizeBatch(t *testing.T) {
 				}
 
 				// Return mock response
-				responseJSON, _ := json.Marshal(tt.responseJSON)
 				response := chatCompletionResponse{
 					Choices: []choice{
 						{
 							Message: message{
 								Role:    "assistant",
-								Content: string(responseJSON),
+								Content: tt.responseBody,
 							},
 						},
 					},
 				}
-				json.NewEncoder(w).Encode(response)
+				_ = json.NewEncoder(w).Encode(response)
 			}))
 			defer server.Close()
 
 			// Create client
-			client := NewGHModelsClient(server.URL, "test-model", "test-token", "")
+			client := NewGHModelsClient(server.URL, "test-model", "test-token", "", 0)
 
 			// Call SummarizeBatch
 			result, err := client.SummarizeBatch(context.Background(), tt.items)
@@ -131,18 +156,20 @@ func TestGHModelsClient_SummarizeBatch(t *testing.T) {
 }
 
 func TestGHModelsClient_buildBatchPrompt(t *testing.T) {
-	client := NewGHModelsClient("http://test", "test-model", "test-token", "")
+	client := NewGHModelsClient("http://test", "test-model", "test-token", "", 0)
 
 	items := []BatchItem{
 		{
-			IssueURL:    "https://github.com/org/repo/issues/1",
-			IssueTitle:  "Feature A",
-			UpdateTexts: []string{"Update 1", "Update 2"},
+			IssueURL:       "https://github.com/org/repo/issues/1",
+			IssueTitle:     "Feature A",
+			UpdateTexts:    []string{"Update 1", "Update 2"},
+			ReportedStatus: "On Track",
 		},
 		{
-			IssueURL:    "https://github.com/org/repo/issues/2",
-			IssueTitle:  "Bug B",
-			UpdateTexts: []string{"Fixed the bug"},
+			IssueURL:       "https://github.com/org/repo/issues/2",
+			IssueTitle:     "Bug B",
+			UpdateTexts:    []string{"Fixed the bug"},
+			ReportedStatus: "At Risk",
 		},
 	}
 
@@ -171,15 +198,51 @@ func TestGHModelsClient_buildBatchPrompt(t *testing.T) {
 	}
 }
 
+func TestBuildBatchPrompt_IncludesReportedStatus(t *testing.T) {
+	client := NewGHModelsClient("http://test", "test-model", "test-token", "", 0)
+
+	items := []BatchItem{
+		{
+			IssueURL:       "https://github.com/org/repo/issues/1",
+			IssueTitle:     "Feature A",
+			UpdateTexts:    []string{"Update 1"},
+			ReportedStatus: "On Track",
+		},
+	}
+
+	prompt, err := client.buildBatchPrompt(items)
+	if err != nil {
+		t.Fatalf("buildBatchPrompt failed: %v", err)
+	}
+
+	// Verify reported_status appears in JSON
+	if !strings.Contains(prompt, `"reported_status"`) {
+		t.Errorf("Expected prompt to contain reported_status field, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "On Track") {
+		t.Errorf("Expected prompt to contain 'On Track' value, got: %s", prompt)
+	}
+
+	// Verify it deserializes correctly
+	var batchReq batchRequest
+	if err := json.Unmarshal([]byte(prompt), &batchReq); err != nil {
+		t.Fatalf("Prompt is not valid JSON: %v", err)
+	}
+
+	if batchReq.Items[0].ReportedStatus != "On Track" {
+		t.Errorf("Expected reported_status 'On Track', got %q", batchReq.Items[0].ReportedStatus)
+	}
+}
+
 func TestGHModelsClient_parseBatchResponse(t *testing.T) {
-	client := NewGHModelsClient("http://test", "test-model", "test-token", "")
+	client := NewGHModelsClient("http://test", "test-model", "test-token", "", 0)
 
 	items := []BatchItem{
 		{IssueURL: "https://github.com/org/repo/issues/1", IssueTitle: "Feature A"},
 		{IssueURL: "https://github.com/org/repo/issues/2", IssueTitle: "Bug B"},
 	}
 
-	t.Run("valid JSON response", func(t *testing.T) {
+	t.Run("valid JSON response with flat format", func(t *testing.T) {
 		jsonResponse := `{
 			"https://github.com/org/repo/issues/1": "Summary for feature A",
 			"https://github.com/org/repo/issues/2": "Summary for bug B"
@@ -191,11 +254,15 @@ func TestGHModelsClient_parseBatchResponse(t *testing.T) {
 		}
 
 		if len(result) != 2 {
-			t.Errorf("Expected 2 summaries, got %d", len(result))
+			t.Errorf("Expected 2 results, got %d", len(result))
 		}
 
-		if result["https://github.com/org/repo/issues/1"] != "Summary for feature A" {
-			t.Errorf("Unexpected summary for issue 1")
+		r1 := result["https://github.com/org/repo/issues/1"]
+		if r1.Summary != "Summary for feature A" {
+			t.Errorf("Unexpected summary for issue 1: %q", r1.Summary)
+		}
+		if r1.Sentiment != nil {
+			t.Errorf("Expected nil sentiment for flat format, got %+v", r1.Sentiment)
 		}
 	})
 
@@ -212,24 +279,213 @@ func TestGHModelsClient_parseBatchResponse(t *testing.T) {
 	})
 }
 
+func TestParseBatchResponse_NestedFormat(t *testing.T) {
+	client := NewGHModelsClient("http://test", "test-model", "test-token", "", 0)
+
+	items := []BatchItem{
+		{IssueURL: "https://github.com/org/repo/issues/1", IssueTitle: "Feature A"},
+		{IssueURL: "https://github.com/org/repo/issues/2", IssueTitle: "Bug B"},
+	}
+
+	response := `{
+		"https://github.com/org/repo/issues/1": {
+			"summary": "Team completed feature A ahead of schedule.",
+			"sentiment": null
+		},
+		"https://github.com/org/repo/issues/2": {
+			"summary": "Bug fix is in progress but blocked on upstream dependency.",
+			"sentiment": {
+				"status": "off_track",
+				"explanation": "Update describes a blocking dependency but status was reported as On Track."
+			}
+		}
+	}`
+
+	result, err := client.parseBatchResponse(response, items)
+	if err != nil {
+		t.Fatalf("parseBatchResponse failed: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("Expected 2 results, got %d", len(result))
+	}
+
+	// Issue 1: no sentiment
+	r1 := result["https://github.com/org/repo/issues/1"]
+	if r1.Summary != "Team completed feature A ahead of schedule." {
+		t.Errorf("Unexpected summary: %q", r1.Summary)
+	}
+	if r1.Sentiment != nil {
+		t.Errorf("Expected nil sentiment, got %+v", r1.Sentiment)
+	}
+
+	// Issue 2: with sentiment
+	r2 := result["https://github.com/org/repo/issues/2"]
+	if r2.Sentiment == nil {
+		t.Fatalf("Expected non-nil sentiment for issue 2")
+	}
+	if r2.Sentiment.SuggestedStatus != "off_track" {
+		t.Errorf("Expected suggested status off_track, got %q", r2.Sentiment.SuggestedStatus)
+	}
+	if !strings.Contains(r2.Sentiment.Explanation, "blocking dependency") {
+		t.Errorf("Expected explanation to mention blocking dependency, got %q", r2.Sentiment.Explanation)
+	}
+}
+
+func TestParseBatchResponse_FlatFormatFallback(t *testing.T) {
+	client := NewGHModelsClient("http://test", "test-model", "test-token", "", 0)
+
+	items := []BatchItem{
+		{IssueURL: "https://github.com/org/repo/issues/1", IssueTitle: "Feature A"},
+		{IssueURL: "https://github.com/org/repo/issues/2", IssueTitle: "Bug B"},
+	}
+
+	// Old flat format: {"url": "summary string"}
+	response := `{
+		"https://github.com/org/repo/issues/1": "Legacy summary for feature A",
+		"https://github.com/org/repo/issues/2": "Legacy summary for bug B"
+	}`
+
+	result, err := client.parseBatchResponse(response, items)
+	if err != nil {
+		t.Fatalf("parseBatchResponse failed: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("Expected 2 results, got %d", len(result))
+	}
+
+	r1 := result["https://github.com/org/repo/issues/1"]
+	if r1.Summary != "Legacy summary for feature A" {
+		t.Errorf("Unexpected summary: %q", r1.Summary)
+	}
+	if r1.Sentiment != nil {
+		t.Errorf("Expected nil sentiment for flat format fallback, got %+v", r1.Sentiment)
+	}
+
+	r2 := result["https://github.com/org/repo/issues/2"]
+	if r2.Summary != "Legacy summary for bug B" {
+		t.Errorf("Unexpected summary: %q", r2.Summary)
+	}
+	if r2.Sentiment != nil {
+		t.Errorf("Expected nil sentiment for flat format fallback, got %+v", r2.Sentiment)
+	}
+}
+
+func TestParseBatchResponse_MarkdownFallback(t *testing.T) {
+	client := NewGHModelsClient("http://test", "test-model", "test-token", "", 0)
+
+	items := []BatchItem{
+		{IssueURL: "https://github.com/org/repo/issues/1", IssueTitle: "Feature A"},
+		{IssueURL: "https://github.com/org/repo/issues/2", IssueTitle: "Bug B"},
+	}
+
+	// Markdown format that some models might return
+	response := `## SUMMARY https://github.com/org/repo/issues/1
+Markdown summary for feature A.
+
+## SUMMARY https://github.com/org/repo/issues/2
+Markdown summary for bug B.`
+
+	result, err := client.parseBatchResponse(response, items)
+	if err != nil {
+		t.Fatalf("parseBatchResponse failed: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("Expected 2 results, got %d", len(result))
+	}
+
+	r1 := result["https://github.com/org/repo/issues/1"]
+	if !strings.Contains(r1.Summary, "feature A") {
+		t.Errorf("Expected summary to mention feature A, got %q", r1.Summary)
+	}
+	if r1.Sentiment != nil {
+		t.Errorf("Expected nil sentiment for markdown fallback, got %+v", r1.Sentiment)
+	}
+}
+
+func TestParseBatchResponse_MixedSentiment(t *testing.T) {
+	client := NewGHModelsClient("http://test", "test-model", "test-token", "", 0)
+
+	items := []BatchItem{
+		{IssueURL: "https://github.com/org/repo/issues/1", IssueTitle: "Feature A"},
+		{IssueURL: "https://github.com/org/repo/issues/2", IssueTitle: "Bug B"},
+		{IssueURL: "https://github.com/org/repo/issues/3", IssueTitle: "Task C"},
+	}
+
+	// Some items have sentiment, others null
+	response := `{
+		"https://github.com/org/repo/issues/1": {
+			"summary": "Feature A is on track.",
+			"sentiment": null
+		},
+		"https://github.com/org/repo/issues/2": {
+			"summary": "Bug B has unresolved blockers.",
+			"sentiment": {
+				"status": "at_risk",
+				"explanation": "Mentions two unresolved blockers."
+			}
+		},
+		"https://github.com/org/repo/issues/3": {
+			"summary": "Task C not yet started.",
+			"sentiment": null
+		}
+	}`
+
+	result, err := client.parseBatchResponse(response, items)
+	if err != nil {
+		t.Fatalf("parseBatchResponse failed: %v", err)
+	}
+
+	if len(result) != 3 {
+		t.Fatalf("Expected 3 results, got %d", len(result))
+	}
+
+	// Issue 1: no sentiment
+	if result["https://github.com/org/repo/issues/1"].Sentiment != nil {
+		t.Errorf("Expected nil sentiment for issue 1")
+	}
+
+	// Issue 2: has sentiment
+	s2 := result["https://github.com/org/repo/issues/2"].Sentiment
+	if s2 == nil {
+		t.Fatalf("Expected non-nil sentiment for issue 2")
+	}
+	if s2.SuggestedStatus != "at_risk" {
+		t.Errorf("Expected at_risk, got %q", s2.SuggestedStatus)
+	}
+	if s2.Explanation != "Mentions two unresolved blockers." {
+		t.Errorf("Unexpected explanation: %q", s2.Explanation)
+	}
+
+	// Issue 3: no sentiment
+	if result["https://github.com/org/repo/issues/3"].Sentiment != nil {
+		t.Errorf("Expected nil sentiment for issue 3")
+	}
+}
+
 func TestNoopSummarizer_SummarizeBatch(t *testing.T) {
 	summarizer := NewNoopSummarizer()
 
 	items := []BatchItem{
 		{
-			IssueURL:    "https://github.com/org/repo/issues/1",
-			IssueTitle:  "Feature A",
-			UpdateTexts: []string{"Update 1", "Update 2"},
+			IssueURL:       "https://github.com/org/repo/issues/1",
+			IssueTitle:     "Feature A",
+			UpdateTexts:    []string{"Update 1", "Update 2"},
+			ReportedStatus: "On Track",
 		},
 		{
-			IssueURL:    "https://github.com/org/repo/issues/2",
-			IssueTitle:  "Bug B",
-			UpdateTexts: []string{"Fixed the bug"},
+			IssueURL:       "https://github.com/org/repo/issues/2",
+			IssueTitle:     "Bug B",
+			UpdateTexts:    []string{"Fixed the bug"},
+			ReportedStatus: "At Risk",
 		},
 		{
-			IssueURL:    "https://github.com/org/repo/issues/3",
-			IssueTitle:  "Empty updates",
-			UpdateTexts: []string{},
+			IssueURL:       "https://github.com/org/repo/issues/3",
+			IssueTitle:     "Empty updates",
+			UpdateTexts:    []string{},
+			ReportedStatus: "Unknown",
 		},
 	}
 
@@ -242,11 +498,19 @@ func TestNoopSummarizer_SummarizeBatch(t *testing.T) {
 		t.Errorf("Expected 3 results, got %d", len(result))
 	}
 
-	if result["https://github.com/org/repo/issues/1"] != "Update 1 Update 2" {
-		t.Errorf("Expected joined updates, got %s", result["https://github.com/org/repo/issues/1"])
+	r1 := result["https://github.com/org/repo/issues/1"]
+	if r1.Summary != "Update 1 Update 2" {
+		t.Errorf("Expected joined updates, got %q", r1.Summary)
+	}
+	if r1.Sentiment != nil {
+		t.Errorf("Expected nil sentiment from NoopSummarizer, got %+v", r1.Sentiment)
 	}
 
-	if result["https://github.com/org/repo/issues/3"] != "" {
-		t.Errorf("Expected empty string for empty updates, got %s", result["https://github.com/org/repo/issues/3"])
+	r3 := result["https://github.com/org/repo/issues/3"]
+	if r3.Summary != "" {
+		t.Errorf("Expected empty string for empty updates, got %q", r3.Summary)
+	}
+	if r3.Sentiment != nil {
+		t.Errorf("Expected nil sentiment from NoopSummarizer, got %+v", r3.Sentiment)
 	}
 }

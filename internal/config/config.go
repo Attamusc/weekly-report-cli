@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -20,6 +22,8 @@ type Config struct {
 		Model        string
 		Enabled      bool
 		SystemPrompt string
+		Sentiment    bool          // true by default when AI enabled, false with --no-sentiment
+		Timeout      time.Duration // HTTP timeout for AI API requests
 	}
 	Project struct {
 		URL         string
@@ -33,7 +37,7 @@ type Config struct {
 }
 
 // FromEnvAndFlags creates a Config from environment variables and CLI flags
-func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool, quiet bool, inputPath string, summaryPrompt string, projectURL string, projectField string, projectFieldValues []string, projectIncludePRs bool, projectMaxItems int, projectView string, projectViewID string) (*Config, error) {
+func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool, quiet bool, inputPath string, summaryPrompt string, projectURL string, projectField string, projectFieldValues []string, projectIncludePRs bool, projectMaxItems int, projectView string, projectViewID string, noSentiment bool) (*Config, error) {
 	// Load environment variables from .env file if it exists
 	_ = godotenv.Load() // Silently ignore if .env file doesn't exist
 	config := &Config{
@@ -66,6 +70,21 @@ func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool,
 
 	// Set custom system prompt if provided
 	config.Models.SystemPrompt = summaryPrompt
+
+	// Sentiment analysis is on by default when AI is enabled
+	config.Models.Sentiment = config.Models.Enabled && !noSentiment
+
+	// AI API timeout: configurable via AI_TIMEOUT env var (in seconds), default 120s
+	config.Models.Timeout = 120 * time.Second
+	if timeoutStr := os.Getenv("AI_TIMEOUT"); timeoutStr != "" {
+		timeoutSec, err := strconv.Atoi(timeoutStr)
+		if err != nil {
+			return nil, errors.New("AI_TIMEOUT must be an integer (seconds)")
+		}
+		if timeoutSec > 0 {
+			config.Models.Timeout = time.Duration(timeoutSec) * time.Second
+		}
+	}
 
 	// Set up project configuration
 	config.Project.URL = projectURL

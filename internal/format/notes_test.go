@@ -125,6 +125,37 @@ func TestRenderNotes(t *testing.T) {
 - https://github.com/owner/repo/issues/3: no update in last 14 days
 `,
 		},
+		{
+			name: "sentiment mismatch note",
+			notes: []Note{
+				{
+					Kind:            NoteSentimentMismatch,
+					IssueURL:        "https://github.com/owner/repo/issues/99",
+					ReportedStatus:  "On Track",
+					SuggestedStatus: "At Risk",
+					Explanation:     "Update mentions two unresolved blockers.",
+				},
+			},
+			expected: "## Notes\n\n- https://github.com/owner/repo/issues/99: reported as On Track, but sentiment suggests At Risk \u2014 Update mentions two unresolved blockers.\n",
+		},
+		{
+			name: "mixed notes including sentiment mismatch",
+			notes: []Note{
+				{
+					Kind:      NoteMultipleUpdates,
+					IssueURL:  "https://github.com/owner/repo/issues/1",
+					SinceDays: 7,
+				},
+				{
+					Kind:            NoteSentimentMismatch,
+					IssueURL:        "https://github.com/owner/repo/issues/2",
+					ReportedStatus:  "On Track",
+					SuggestedStatus: "Off Track",
+					Explanation:     "Blocked on upstream dependency.",
+				},
+			},
+			expected: "## Notes\n\n- https://github.com/owner/repo/issues/1: multiple structured updates in last 7 days\n- https://github.com/owner/repo/issues/2: reported as On Track, but sentiment suggests Off Track \u2014 Blocked on upstream dependency.\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -187,6 +218,17 @@ func TestRenderNoteBullet(t *testing.T) {
 				IssueURL: "https://github.com/owner/repo/issues/42",
 			},
 			expected: "https://github.com/owner/repo/issues/42: no structured update found \u2014 summary derived from most recent comment",
+		},
+		{
+			name: "sentiment mismatch",
+			note: Note{
+				Kind:            NoteSentimentMismatch,
+				IssueURL:        "https://github.com/owner/repo/issues/55",
+				ReportedStatus:  "On Track",
+				SuggestedStatus: "At Risk",
+				Explanation:     "Content describes unresolved blockers.",
+			},
+			expected: "https://github.com/owner/repo/issues/55: reported as On Track, but sentiment suggests At Risk \u2014 Content describes unresolved blockers.",
 		},
 		{
 			name: "unknown note kind",
@@ -270,6 +312,7 @@ func TestHasNotesOfKind(t *testing.T) {
 		{Kind: NoteNoUpdatesInWindow, IssueURL: "url2", SinceDays: 14},
 		{Kind: NoteMultipleUpdates, IssueURL: "url3", SinceDays: 3},
 		{Kind: NoteUnstructuredFallback, IssueURL: "url4"},
+		{Kind: NoteSentimentMismatch, IssueURL: "url5", ReportedStatus: "On Track", SuggestedStatus: "At Risk", Explanation: "blockers"},
 	}
 
 	tests := []struct {
@@ -294,6 +337,12 @@ func TestHasNotesOfKind(t *testing.T) {
 			name:     "has unstructured fallback",
 			notes:    notes,
 			kind:     NoteUnstructuredFallback,
+			expected: true,
+		},
+		{
+			name:     "has sentiment mismatch",
+			notes:    notes,
+			kind:     NoteSentimentMismatch,
 			expected: true,
 		},
 		{

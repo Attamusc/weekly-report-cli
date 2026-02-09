@@ -249,6 +249,136 @@ func TestStatusString(t *testing.T) {
 	}
 }
 
+func TestStatusKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   Status
+		expected string
+	}{
+		{name: "on track", status: OnTrack, expected: "on_track"},
+		{name: "at risk", status: AtRisk, expected: "at_risk"},
+		{name: "off track", status: OffTrack, expected: "off_track"},
+		{name: "not started", status: NotStarted, expected: "not_started"},
+		{name: "done", status: Done, expected: "done"},
+		{name: "needs update", status: NeedsUpdate, expected: "needs_update"},
+		{name: "unknown", status: Unknown, expected: "unknown"},
+		{name: "unrecognized status", status: Status{Emoji: ":star:", Caption: "Custom"}, expected: "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.status.Key()
+			if result != tt.expected {
+				t.Errorf("Status.Key() = %q, expected %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseStatusKey_ValidKeys(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      string
+		expected Status
+	}{
+		{name: "on_track", key: "on_track", expected: OnTrack},
+		{name: "at_risk", key: "at_risk", expected: AtRisk},
+		{name: "off_track", key: "off_track", expected: OffTrack},
+		{name: "not_started", key: "not_started", expected: NotStarted},
+		{name: "done", key: "done", expected: Done},
+		{name: "needs_update", key: "needs_update", expected: NeedsUpdate},
+		{name: "unknown", key: "unknown", expected: Unknown},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, ok := ParseStatusKey(tt.key)
+			if !ok {
+				t.Fatalf("ParseStatusKey(%q) returned ok=false, expected ok=true", tt.key)
+			}
+			if result != tt.expected {
+				t.Errorf("ParseStatusKey(%q) = %+v, expected %+v", tt.key, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseStatusKey_InvalidKey(t *testing.T) {
+	result, ok := ParseStatusKey("nonexistent")
+	if ok {
+		t.Errorf("ParseStatusKey(\"nonexistent\") returned ok=true, expected ok=false")
+	}
+	if result != Unknown {
+		t.Errorf("ParseStatusKey(\"nonexistent\") = %+v, expected Unknown", result)
+	}
+}
+
+func TestParseStatusKey_CaseInsensitive(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      string
+		expected Status
+	}{
+		{name: "uppercase ON_TRACK", key: "ON_TRACK", expected: OnTrack},
+		{name: "mixed case At_Risk", key: "At_Risk", expected: AtRisk},
+		{name: "uppercase DONE", key: "DONE", expected: Done},
+		{name: "mixed Off_Track", key: "Off_Track", expected: OffTrack},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, ok := ParseStatusKey(tt.key)
+			if !ok {
+				t.Fatalf("ParseStatusKey(%q) returned ok=false, expected ok=true", tt.key)
+			}
+			if result != tt.expected {
+				t.Errorf("ParseStatusKey(%q) = %+v, expected %+v", tt.key, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseStatusKey_Whitespace(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      string
+		expected Status
+	}{
+		{name: "leading space", key: " at_risk", expected: AtRisk},
+		{name: "trailing space", key: "at_risk ", expected: AtRisk},
+		{name: "both sides", key: " on_track ", expected: OnTrack},
+		{name: "tabs", key: "\tdone\t", expected: Done},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, ok := ParseStatusKey(tt.key)
+			if !ok {
+				t.Fatalf("ParseStatusKey(%q) returned ok=false, expected ok=true", tt.key)
+			}
+			if result != tt.expected {
+				t.Errorf("ParseStatusKey(%q) = %+v, expected %+v", tt.key, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestStatusKey_Roundtrip(t *testing.T) {
+	// Verify that Key() -> ParseStatusKey() round-trips for all known statuses
+	statuses := []Status{OnTrack, AtRisk, OffTrack, NotStarted, Done, NeedsUpdate, Unknown}
+
+	for _, status := range statuses {
+		key := status.Key()
+		parsed, ok := ParseStatusKey(key)
+		if !ok {
+			t.Fatalf("ParseStatusKey(%q) returned ok=false for key from %+v", key, status)
+		}
+		if parsed != status {
+			t.Errorf("Round-trip failed: %+v -> %q -> %+v", status, key, parsed)
+		}
+	}
+}
+
 func TestCircleEmojiRegex(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -47,7 +47,7 @@ func NewClient(token string) *Client {
 // Handles pagination automatically and returns all items up to maxItems limit
 func (c *Client) FetchProjectItems(ctx context.Context, config ProjectConfig) ([]ProjectItem, error) {
 	// Get logger from context if available
-	logger, ok := ctx.Value("logger").(*slog.Logger)
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
@@ -144,7 +144,7 @@ func (c *Client) FetchProjectItems(ctx context.Context, config ProjectConfig) ([
 // FetchProjectViews fetches all views from a project
 func (c *Client) FetchProjectViews(ctx context.Context, ref ProjectRef) ([]ProjectView, error) {
 	// Get logger from context if available
-	logger, ok := ctx.Value("logger").(*slog.Logger)
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
@@ -203,7 +203,7 @@ func (c *Client) FetchProjectViews(ctx context.Context, ref ProjectRef) ([]Proje
 // resolveView resolves a view by ID or name
 func (c *Client) resolveView(ctx context.Context, config ProjectConfig) (*ProjectView, error) {
 	// Get logger from context
-	logger, ok := ctx.Value("logger").(*slog.Logger)
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
@@ -329,7 +329,7 @@ func (c *Client) fetchProjectPage(ctx context.Context, query string, ref Project
 // executeGraphQLWithRetry executes a GraphQL request with retry logic
 func (c *Client) executeGraphQLWithRetry(ctx context.Context, request graphQLRequest, ref ProjectRef) (*graphQLResponse, error) {
 	// Get logger from context
-	logger, ok := ctx.Value("logger").(*slog.Logger)
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}

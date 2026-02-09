@@ -21,9 +21,6 @@ const (
 // Default close reason message
 const defaultCloseReason = "Issue was closed"
 
-// LoggerContextKey is the context key for the logger
-type LoggerContextKey struct{}
-
 // IssueData represents GitHub issue metadata
 type IssueData struct {
 	URL         string
@@ -47,7 +44,7 @@ type Comment struct {
 // FetchIssue retrieves issue metadata from GitHub API
 func FetchIssue(ctx context.Context, client *github.Client, ref input.IssueRef) (IssueData, error) {
 	// Get logger from context if available
-	logger, ok := ctx.Value(LoggerContextKey{}).(*slog.Logger)
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
@@ -169,7 +166,7 @@ func findClosingComment(ctx context.Context, client *github.Client, ref input.Is
 // Uses pagination to fetch all comments and filters by CreatedAt
 func FetchCommentsSince(ctx context.Context, client *github.Client, ref input.IssueRef, since time.Time) ([]Comment, error) {
 	// Get logger from context if available
-	logger, ok := ctx.Value(LoggerContextKey{}).(*slog.Logger)
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}

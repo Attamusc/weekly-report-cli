@@ -16,13 +16,19 @@ const (
 	// NoteUnstructuredFallback indicates the summary was derived from the most recent
 	// comment rather than a structured report
 	NoteUnstructuredFallback
+	// NoteSentimentMismatch indicates the AI detected a mismatch between the
+	// reported status and the content of the updates
+	NoteSentimentMismatch
 )
 
 // Note represents a note entry about an issue's status reporting
 type Note struct {
-	Kind      NoteKind // Type of note
-	IssueURL  string   // URL of the GitHub issue
-	SinceDays int      // Number of days in the search window
+	Kind            NoteKind // Type of note
+	IssueURL        string   // URL of the GitHub issue
+	SinceDays       int      // Number of days in the search window
+	ReportedStatus  string   // The original reported status caption (for sentiment mismatch)
+	SuggestedStatus string   // AI-suggested status caption (for sentiment mismatch)
+	Explanation     string   // AI explanation of the mismatch (for sentiment mismatch)
 }
 
 // RenderNotes generates a markdown notes section from a slice of notes
@@ -67,6 +73,10 @@ func renderNoteBullet(note Note) string {
 	case NoteUnstructuredFallback:
 		return fmt.Sprintf("%s: no structured update found — summary derived from most recent comment",
 			note.IssueURL)
+
+	case NoteSentimentMismatch:
+		return fmt.Sprintf("%s: reported as %s, but sentiment suggests %s — %s",
+			note.IssueURL, note.ReportedStatus, note.SuggestedStatus, note.Explanation)
 
 	default:
 		// Unknown note kind, return empty string

@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+// LoggerContextKey is the context key type for the structured logger.
+// Use input.LoggerContextKey{} with context.WithValue / ctx.Value to
+// store and retrieve *slog.Logger without triggering SA1029.
+type LoggerContextKey struct{}
+
 // InputMode represents the detected input mode
 type InputMode int
 
@@ -65,7 +70,7 @@ type ProjectClient interface {
 // This is the main entry point for getting issues from any source
 func ResolveIssueRefs(ctx context.Context, cfg ResolverConfig, projectClient ProjectClient) ([]IssueRef, error) {
 	// Get logger from context
-	logger, ok := ctx.Value("logger").(*slog.Logger)
+	logger, ok := ctx.Value(LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
@@ -148,7 +153,7 @@ func validateConfig(cfg ResolverConfig) error {
 // fetchFromProject fetches issue references from a project board
 func fetchFromProject(ctx context.Context, cfg ResolverConfig, projectClient ProjectClient) ([]IssueRef, error) {
 	// Get logger from context
-	logger, ok := ctx.Value("logger").(*slog.Logger)
+	logger, ok := ctx.Value(LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}

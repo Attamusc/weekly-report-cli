@@ -54,6 +54,9 @@ var statusMappings = []struct {
 	},
 }
 
+// statusKeyUnknown is the canonical snake_case key for the Unknown status.
+const statusKeyUnknown = "unknown"
+
 // Circle emoji regex to strip leading emoji
 var circleEmojiRegex = regexp.MustCompile(`^[🟢🟡🔴⚪🟣]\s*`)
 
@@ -88,4 +91,49 @@ func MapTrending(raw string) Status {
 // String returns a formatted status string for display
 func (s Status) String() string {
 	return s.Emoji + " " + s.Caption
+}
+
+// Key returns the canonical snake_case key for the status.
+func (s Status) Key() string {
+	switch s {
+	case OnTrack:
+		return "on_track"
+	case AtRisk:
+		return "at_risk"
+	case OffTrack:
+		return "off_track"
+	case NotStarted:
+		return "not_started"
+	case Done:
+		return "done"
+	case NeedsUpdate:
+		return "needs_update"
+	case Unknown:
+		return statusKeyUnknown
+	default:
+		return statusKeyUnknown
+	}
+}
+
+// ParseStatusKey converts a canonical snake_case status key to a Status value.
+// Returns (Status, false) if the key is not recognized.
+func ParseStatusKey(key string) (Status, bool) {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "on_track":
+		return OnTrack, true
+	case "at_risk":
+		return AtRisk, true
+	case "off_track":
+		return OffTrack, true
+	case "not_started":
+		return NotStarted, true
+	case "done":
+		return Done, true
+	case "needs_update":
+		return NeedsUpdate, true
+	case statusKeyUnknown:
+		return Unknown, true
+	default:
+		return Unknown, false
+	}
 }

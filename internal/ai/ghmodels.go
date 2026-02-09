@@ -26,9 +26,12 @@ type GHModelsClient struct {
 }
 
 // NewGHModelsClient creates a new GitHub Models API client
-func NewGHModelsClient(baseURL, model, token, systemPrompt string) *GHModelsClient {
+func NewGHModelsClient(baseURL, model, token, systemPrompt string, timeout time.Duration) *GHModelsClient {
+	if timeout <= 0 {
+		timeout = 120 * time.Second
+	}
 	return &GHModelsClient{
-		HTTP:         &http.Client{Timeout: 30 * time.Second},
+		HTTP:         &http.Client{Timeout: timeout},
 		BaseURL:      baseURL,
 		Model:        model,
 		Token:        token,
@@ -69,17 +72,38 @@ You will receive a JSON object with an array of items, each containing:
 - id: A unique identifier (the issue URL)
 - issue: The issue title
 - updates: One or more status updates (newest first)
+- reported_status: The author's claimed status
 
-Respond with ONLY a valid JSON object where:
-- Keys are the item IDs (URLs) as strings
-- Values are the summaries (3-5 sentences, present tense, third-person, markdown-ready)
+For each item, produce:
+1. A summary: 3-5 sentences, present tense, third-person, markdown-ready, no prefatory text.
+   Keep relevant links intact in markdown format. Do not lose context when summarizing.
+2. A sentiment assessment: analyze whether the update content matches the reported status.
+   - If the content describes blockers, delays, risks, or problems but the status is "On Track",
+     suggest a more appropriate status.
+   - If the content is positive but the status is "At Risk" or "Off Track", suggest a better status.
+   - If the reported status is "Unknown", suggest an appropriate status based on the content.
+   - If the status matches the content, set sentiment to null.
 
-Keep relevant markdown links intact. Do not add any prefatory text, explanation, or markdown code fences.
+Respond ONLY with a valid JSON object. The keys are the issue URLs (from the "id" field).
+Each value is an object with "summary" (string) and "sentiment" (object or null).
 
-Example response format:
+When sentiment is not null, it must have:
+- "status": one of "on_track", "at_risk", "off_track", "not_started", "done"
+- "explanation": one sentence explaining the mismatch
+
+Example response:
 {
-  "https://github.com/org/repo/issues/1": "Team completed OAuth integration...",
-  "https://github.com/org/repo/issues/2": "Team fixed critical race condition..."
+  "https://github.com/org/repo/issues/1": {
+    "summary": "The team completed the migration...",
+    "sentiment": null
+  },
+  "https://github.com/org/repo/issues/2": {
+    "summary": "Work on the API integration is ongoing...",
+    "sentiment": {
+      "status": "at_risk",
+      "explanation": "Update mentions two unresolved blockers despite being reported as On Track."
+    }
+  }
 }`
 
 	describeSystemPrompt = `You are a technical writer summarizing GitHub issues for project documentation.
@@ -290,9 +314,10 @@ func (e *HTTPError) Error() string {
 
 // batchRequestItem represents a single item in a batch request
 type batchRequestItem struct {
-	ID      string   `json:"id"`
-	Issue   string   `json:"issue"`
-	Updates []string `json:"updates"`
+	ID             string   `json:"id"`
+	Issue          string   `json:"issue"`
+	Updates        []string `json:"updates"`
+	ReportedStatus string   `json:"reported_status"`
 }
 
 // batchRequest represents the structure sent to the API for batch summarization
@@ -308,9 +333,10 @@ func (c *GHModelsClient) buildBatchPrompt(items []BatchItem) (string, error) {
 
 	for i, item := range items {
 		batchReq.Items[i] = batchRequestItem{
-			ID:      item.IssueURL,
-			Issue:   item.IssueTitle,
-			Updates: item.UpdateTexts,
+			ID:             item.IssueURL,
+			Issue:          item.IssueTitle,
+			Updates:        item.UpdateTexts,
+			ReportedStatus: item.ReportedStatus,
 		}
 	}
 
@@ -322,18 +348,65 @@ func (c *GHModelsClient) buildBatchPrompt(items []BatchItem) (string, error) {
 	return string(jsonBytes), nil
 }
 
+// sentimentResponseItem represents the new nested AI response format.
+type sentimentResponseItem struct {
+	Summary   string          `json:"summary"`
+	Sentiment *sentimentMatch `json:"sentiment"`
+}
+
+// sentimentMatch represents the AI's sentiment assessment in the response JSON.
+type sentimentMatch struct {
+	Status      string `json:"status"`
+	Explanation string `json:"explanation"`
+}
+
 // parseBatchResponse attempts to parse the API response as JSON
-// Returns a map of issueURL -> summary
-func (c *GHModelsClient) parseBatchResponse(response string, items []BatchItem) (map[string]string, error) {
-	// Try to parse as JSON first
-	var jsonResponse map[string]string
-	if err := json.Unmarshal([]byte(response), &jsonResponse); err == nil {
-		// Successfully parsed JSON
-		return jsonResponse, nil
+// Tries formats in order: nested (with sentiment), flat (legacy), markdown fallback
+func (c *GHModelsClient) parseBatchResponse(response string, items []BatchItem) (map[string]BatchResult, error) {
+	// Try new nested format first: {"url": {"summary": "...", "sentiment": {...}}}
+	var nested map[string]sentimentResponseItem
+	if err := json.Unmarshal([]byte(response), &nested); err == nil && len(nested) > 0 {
+		// Verify at least one item has a "summary" field to distinguish
+		// from the old flat format (which also unmarshals into this shape)
+		for _, v := range nested {
+			if v.Summary != "" {
+				return convertNestedResponse(nested), nil
+			}
+			break
+		}
 	}
 
-	// JSON parsing failed - try markdown fallback
+	// Fall back to old flat format: {"url": "summary text"}
+	var flat map[string]string
+	if err := json.Unmarshal([]byte(response), &flat); err == nil && len(flat) > 0 {
+		results := make(map[string]BatchResult, len(flat))
+		for url, summary := range flat {
+			results[url] = BatchResult{Summary: summary, Sentiment: nil}
+		}
+		return results, nil
+	}
+
+	// Fall back to markdown parsing
 	return c.parseMarkdownBatchResponse(response, items)
+}
+
+// convertNestedResponse converts the nested AI response to BatchResult map
+func convertNestedResponse(nested map[string]sentimentResponseItem) map[string]BatchResult {
+	results := make(map[string]BatchResult, len(nested))
+	for url, item := range nested {
+		var sentiment *SentimentResult
+		if item.Sentiment != nil {
+			sentiment = &SentimentResult{
+				SuggestedStatus: item.Sentiment.Status,
+				Explanation:     item.Sentiment.Explanation,
+			}
+		}
+		results[url] = BatchResult{
+			Summary:   item.Summary,
+			Sentiment: sentiment,
+		}
+	}
+	return results
 }
 
 // parseMarkdownBatchResponse parses a markdown-formatted batch response
@@ -343,8 +416,8 @@ func (c *GHModelsClient) parseBatchResponse(response string, items []BatchItem) 
 //
 // ## SUMMARY <URL>
 // <summary text>
-func (c *GHModelsClient) parseMarkdownBatchResponse(response string, items []BatchItem) (map[string]string, error) {
-	result := make(map[string]string)
+func (c *GHModelsClient) parseMarkdownBatchResponse(response string, items []BatchItem) (map[string]BatchResult, error) {
+	result := make(map[string]BatchResult)
 
 	// Split by "## SUMMARY" markers
 	parts := strings.Split(response, "## SUMMARY")
@@ -368,7 +441,7 @@ func (c *GHModelsClient) parseMarkdownBatchResponse(response string, items []Bat
 		// Try to find a matching URL from our items
 		for _, item := range items {
 			if strings.Contains(urlLine, item.IssueURL) {
-				result[item.IssueURL] = summary
+				result[item.IssueURL] = BatchResult{Summary: summary, Sentiment: nil}
 				break
 			}
 		}
@@ -382,58 +455,104 @@ func (c *GHModelsClient) parseMarkdownBatchResponse(response string, items []Bat
 	return result, nil
 }
 
-// SummarizeBatch generates summaries for multiple issues in a single request
-// Implements chunking to avoid token limits
-func (c *GHModelsClient) SummarizeBatch(ctx context.Context, items []BatchItem) (map[string]string, error) {
-	// Get logger from context if available
-	logger, ok := ctx.Value(loggerContextKey{}).(*slog.Logger)
-	if !ok {
-		logger = slog.Default()
-	}
+// batchConfig holds the parameters for a generic batch API call.
+type batchConfig struct {
+	systemPrompt string // System prompt to use during the API call
+	actionName   string // "summarize" or "describe" for log messages
+}
 
-	if len(items) == 0 {
-		return map[string]string{}, nil
-	}
-
-	// If we have more than maxBatchSize items, chunk them
-	if len(items) > maxBatchSize {
-		logger.Debug("Splitting batch into chunks", "totalItems", len(items), "chunkSize", maxBatchSize)
-		return c.summarizeBatchChunked(ctx, items, logger)
-	}
-
-	logger.Debug("AI batch summarizing", "model", c.Model, "items", len(items))
-
-	// Build the prompt
-	userPrompt, err := c.buildBatchPrompt(items)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build batch prompt: %w", err)
-	}
-
+// executeBatchCall handles the common batch orchestration: swap system prompt,
+// call the API, and return the raw response string. The caller is responsible
+// for building the user prompt and parsing the response.
+func (c *GHModelsClient) executeBatchCall(ctx context.Context, cfg batchConfig, userPrompt string) (string, error) {
 	// Use custom system prompt for batch mode
 	originalPrompt := c.SystemPrompt
-	c.SystemPrompt = batchSystemPrompt
+	c.SystemPrompt = cfg.systemPrompt
 	defer func() { c.SystemPrompt = originalPrompt }()
 
 	// Call API
 	response, err := c.callAPI(ctx, userPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("batch API call failed: %w", err)
+		return "", fmt.Errorf("%s API call failed: %w", cfg.actionName, err)
 	}
 
-	// Parse response
-	summaries, err := c.parseBatchResponse(response, items)
+	return response, nil
+}
+
+// getContextLogger retrieves the logger from context, falling back to slog.Default.
+func getContextLogger(ctx context.Context) *slog.Logger {
+	logger, ok := ctx.Value(loggerContextKey{}).(*slog.Logger)
+	if !ok {
+		return slog.Default()
+	}
+	return logger
+}
+
+// runBatch is the generic batch orchestration: check empty, chunk if needed,
+// build prompt, call API, parse response. Type parameters allow it to work
+// with both BatchItem/BatchResult and DescribeBatchItem/string.
+func runBatch[I any, R any](
+	ctx context.Context,
+	c *GHModelsClient,
+	items []I,
+	cfg batchConfig,
+	buildPrompt func([]I) (string, error),
+	parseResponse func(string) (map[string]R, error),
+	selfFn func(context.Context, []I) (map[string]R, error),
+) (map[string]R, error) {
+	logger := getContextLogger(ctx)
+
+	if len(items) == 0 {
+		return make(map[string]R), nil
+	}
+
+	// If we have more than maxBatchSize items, chunk them
+	if len(items) > maxBatchSize {
+		logger.Debug("Splitting "+cfg.actionName+" batch into chunks", "totalItems", len(items), "chunkSize", maxBatchSize)
+		return chunkedBatch(ctx, items, logger, cfg.actionName, selfFn)
+	}
+
+	logger.Debug("AI "+cfg.actionName+" batch", "model", c.Model, "items", len(items))
+
+	// Build the prompt
+	userPrompt, err := buildPrompt(items)
 	if err != nil {
-		logger.Debug("Failed to parse batch response", "error", err)
+		return nil, fmt.Errorf("failed to build %s prompt: %w", cfg.actionName, err)
+	}
+
+	response, err := c.executeBatchCall(ctx, cfg, userPrompt)
+	if err != nil {
 		return nil, err
 	}
 
-	logger.Debug("Batch summarization succeeded", "summaries", len(summaries))
-	return summaries, nil
+	// Parse response
+	results, err := parseResponse(response)
+	if err != nil {
+		logger.Debug("Failed to parse "+cfg.actionName+" response", "error", err)
+		return nil, err
+	}
+
+	logger.Debug("Batch "+cfg.actionName+" succeeded", "results", len(results))
+	return results, nil
 }
 
-// summarizeBatchChunked splits items into chunks and processes them sequentially
-func (c *GHModelsClient) summarizeBatchChunked(ctx context.Context, items []BatchItem, logger *slog.Logger) (map[string]string, error) {
-	result := make(map[string]string)
+// SummarizeBatch generates summaries for multiple issues in a single request
+// Implements chunking to avoid token limits
+func (c *GHModelsClient) SummarizeBatch(ctx context.Context, items []BatchItem) (map[string]BatchResult, error) {
+	cfg := batchConfig{systemPrompt: batchSystemPrompt, actionName: "summarize"}
+	return runBatch(ctx, c, items, cfg,
+		c.buildBatchPrompt,
+		func(resp string) (map[string]BatchResult, error) {
+			return c.parseBatchResponse(resp, items)
+		},
+		c.SummarizeBatch,
+	)
+}
+
+// chunkedBatch splits items into chunks and processes them sequentially.
+// It works with any item and result types by accepting a batch function.
+func chunkedBatch[I any, R any](ctx context.Context, items []I, logger *slog.Logger, actionName string, batchFn func(context.Context, []I) (map[string]R, error)) (map[string]R, error) {
+	result := make(map[string]R)
 
 	for i := 0; i < len(items); i += maxBatchSize {
 		end := i + maxBatchSize
@@ -442,16 +561,17 @@ func (c *GHModelsClient) summarizeBatchChunked(ctx context.Context, items []Batc
 		}
 
 		chunk := items[i:end]
-		logger.Debug("Processing batch chunk", "chunk", i/maxBatchSize+1, "items", len(chunk))
+		chunkNum := i/maxBatchSize + 1
+		logger.Debug("Processing "+actionName+" chunk", "chunk", chunkNum, "items", len(chunk))
 
-		chunkSummaries, err := c.SummarizeBatch(ctx, chunk)
+		chunkResults, err := batchFn(ctx, chunk)
 		if err != nil {
-			return nil, fmt.Errorf("chunk %d failed: %w", i/maxBatchSize+1, err)
+			return nil, fmt.Errorf("%s chunk %d failed: %w", actionName, chunkNum, err)
 		}
 
 		// Merge results
-		for url, summary := range chunkSummaries {
-			result[url] = summary
+		for url, val := range chunkResults {
+			result[url] = val
 		}
 	}
 
@@ -495,50 +615,14 @@ func (c *GHModelsClient) buildDescribePrompt(items []DescribeBatchItem) (string,
 // DescribeBatch generates project/goal summaries for issue descriptions
 // Implements chunking to avoid token limits
 func (c *GHModelsClient) DescribeBatch(ctx context.Context, items []DescribeBatchItem) (map[string]string, error) {
-	// Get logger from context if available
-	logger, ok := ctx.Value(loggerContextKey{}).(*slog.Logger)
-	if !ok {
-		logger = slog.Default()
-	}
-
-	if len(items) == 0 {
-		return map[string]string{}, nil
-	}
-
-	// If we have more than maxBatchSize items, chunk them
-	if len(items) > maxBatchSize {
-		logger.Debug("Splitting describe batch into chunks", "totalItems", len(items), "chunkSize", maxBatchSize)
-		return c.describeBatchChunked(ctx, items, logger)
-	}
-
-	logger.Debug("AI batch describing", "model", c.Model, "items", len(items))
-
-	// Build the prompt
-	userPrompt, err := c.buildDescribePrompt(items)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build describe prompt: %w", err)
-	}
-
-	// Use custom system prompt for describe mode
-	originalPrompt := c.SystemPrompt
-	c.SystemPrompt = describeSystemPrompt
-	defer func() { c.SystemPrompt = originalPrompt }()
-
-	// Call API
-	response, err := c.callAPI(ctx, userPrompt)
-	if err != nil {
-		return nil, fmt.Errorf("describe API call failed: %w", err)
-	}
-
-	// Parse response (reuse the same parsing logic as SummarizeBatch)
-	summaries, err := c.parseDescribeResponse(response, items)
-	if err != nil {
-		logger.Debug("Failed to parse describe response", "error", err)
-		return nil, err
-	}
-
-	logger.Debug("Batch description succeeded", "summaries", len(summaries))
-	return summaries, nil
+	cfg := batchConfig{systemPrompt: describeSystemPrompt, actionName: "describe"}
+	return runBatch(ctx, c, items, cfg,
+		c.buildDescribePrompt,
+		func(resp string) (map[string]string, error) {
+			return c.parseDescribeResponse(resp, items)
+		},
+		c.DescribeBatch,
+	)
 }
 
 // parseDescribeResponse attempts to parse the API response as JSON
@@ -590,33 +674,6 @@ func (c *GHModelsClient) parseMarkdownDescribeResponse(response string, items []
 	// If we didn't parse any descriptions, return error
 	if len(result) == 0 {
 		return nil, fmt.Errorf("failed to parse describe response in both JSON and markdown formats")
-	}
-
-	return result, nil
-}
-
-// describeBatchChunked splits items into chunks and processes them sequentially
-func (c *GHModelsClient) describeBatchChunked(ctx context.Context, items []DescribeBatchItem, logger *slog.Logger) (map[string]string, error) {
-	result := make(map[string]string)
-
-	for i := 0; i < len(items); i += maxBatchSize {
-		end := i + maxBatchSize
-		if end > len(items) {
-			end = len(items)
-		}
-
-		chunk := items[i:end]
-		logger.Debug("Processing describe chunk", "chunk", i/maxBatchSize+1, "items", len(chunk))
-
-		chunkDescriptions, err := c.DescribeBatch(ctx, chunk)
-		if err != nil {
-			return nil, fmt.Errorf("describe chunk %d failed: %w", i/maxBatchSize+1, err)
-		}
-
-		// Merge results
-		for url, description := range chunkDescriptions {
-			result[url] = description
-		}
 	}
 
 	return result, nil

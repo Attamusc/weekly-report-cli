@@ -142,7 +142,7 @@ func TestGHModelsClient_Summarize(t *testing.T) {
 			defer server.Close()
 
 			// Create client
-			client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "")
+			client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "", 0)
 
 			// Call method
 			ctx := context.Background()
@@ -207,7 +207,7 @@ func TestGHModelsClient_SummarizeMany(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "")
+	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "", 0)
 
 	updates := []string{
 		"First update text",
@@ -257,7 +257,7 @@ func TestGHModelsClient_RetryOnRateLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "")
+	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "", 0)
 
 	ctx := context.Background()
 	result, err := client.Summarize(ctx, "Test", "https://github.com/test/repo/issues/1", "Update text")
@@ -283,7 +283,7 @@ func TestGHModelsClient_ContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "")
+	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "", 0)
 
 	// Create context that cancels immediately
 	ctx, cancel := context.WithCancel(context.Background())
@@ -340,7 +340,7 @@ func TestGHModelsClient_CustomSystemPrompt(t *testing.T) {
 	defer server.Close()
 
 	// Create client with custom prompt
-	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", customPrompt)
+	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", customPrompt, 0)
 
 	ctx := context.Background()
 	result, err := client.Summarize(ctx, "Test Issue", "https://github.com/test/repo/issues/1", "Test update")
@@ -388,7 +388,7 @@ func TestGHModelsClient_DefaultSystemPrompt(t *testing.T) {
 	defer server.Close()
 
 	// Create client with empty prompt (should use default)
-	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "")
+	client := NewGHModelsClient(server.URL, "gpt-4o-mini", "test-token", "", 0)
 
 	ctx := context.Background()
 	result, err := client.Summarize(ctx, "Test Issue", "https://github.com/test/repo/issues/1", "Test update")

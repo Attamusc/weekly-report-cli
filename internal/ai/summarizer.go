@@ -5,11 +5,25 @@ import (
 	"strings"
 )
 
+// SentimentResult holds the AI's assessment of whether the reported status
+// matches the content of the updates.
+type SentimentResult struct {
+	SuggestedStatus string // Canonical status key: "on_track", "at_risk", "off_track", etc.
+	Explanation     string // Brief AI explanation of the mismatch
+}
+
+// BatchResult holds both the summary and optional sentiment for a single issue.
+type BatchResult struct {
+	Summary   string
+	Sentiment *SentimentResult // nil when sentiment is disabled or unavailable
+}
+
 // BatchItem represents a single item to summarize in a batch request
 type BatchItem struct {
-	IssueURL    string   // Unique identifier for matching response
-	IssueTitle  string   // Issue title for context
-	UpdateTexts []string // One or more updates (newest first)
+	IssueURL       string   // Unique identifier for matching response
+	IssueTitle     string   // Issue title for context
+	UpdateTexts    []string // One or more updates (newest first)
+	ReportedStatus string   // The reporter's claimed status (e.g., "On Track", "Unknown")
 }
 
 // DescribeBatchItem represents a single item for project/goal description
@@ -28,8 +42,8 @@ type Summarizer interface {
 	SummarizeMany(ctx context.Context, issueTitle, issueURL string, updates []string) (string, error)
 
 	// SummarizeBatch generates summaries for multiple issues in a single request
-	// Returns a map of issueURL -> summary
-	SummarizeBatch(ctx context.Context, items []BatchItem) (map[string]string, error)
+	// Returns a map of issueURL -> BatchResult (summary + optional sentiment)
+	SummarizeBatch(ctx context.Context, items []BatchItem) (map[string]BatchResult, error)
 
 	// DescribeBatch generates project/goal summaries for issue descriptions
 	// Returns a map of issueURL -> description summary
@@ -55,14 +69,14 @@ func (n *NoopSummarizer) SummarizeMany(_ context.Context, _, _ string, updates [
 }
 
 // SummarizeBatch returns raw update texts for each item
-func (n *NoopSummarizer) SummarizeBatch(_ context.Context, items []BatchItem) (map[string]string, error) {
-	result := make(map[string]string, len(items))
+func (n *NoopSummarizer) SummarizeBatch(_ context.Context, items []BatchItem) (map[string]BatchResult, error) {
+	result := make(map[string]BatchResult, len(items))
 	for _, item := range items {
+		var summary string
 		if len(item.UpdateTexts) > 0 {
-			result[item.IssueURL] = strings.TrimSpace(strings.Join(item.UpdateTexts, " "))
-		} else {
-			result[item.IssueURL] = ""
+			summary = strings.TrimSpace(strings.Join(item.UpdateTexts, " "))
 		}
+		result[item.IssueURL] = BatchResult{Summary: summary, Sentiment: nil}
 	}
 	return result, nil
 }
