@@ -228,6 +228,11 @@ func TestStatusString(t *testing.T) {
 			expected: ":white_circle: Needs Update",
 		},
 		{
+			name:     "shaping",
+			status:   Shaping,
+			expected: ":diamond_shape_with_a_dot_inside: Shaping",
+		},
+		{
 			name:     "done",
 			status:   Done,
 			expected: ":purple_circle: Done",
@@ -261,6 +266,7 @@ func TestStatusKey(t *testing.T) {
 		{name: "not started", status: NotStarted, expected: "not_started"},
 		{name: "done", status: Done, expected: "done"},
 		{name: "needs update", status: NeedsUpdate, expected: "needs_update"},
+		{name: "shaping", status: Shaping, expected: "shaping"},
 		{name: "unknown", status: Unknown, expected: "unknown"},
 		{name: "unrecognized status", status: Status{Emoji: ":star:", Caption: "Custom"}, expected: "unknown"},
 	}
@@ -287,6 +293,7 @@ func TestParseStatusKey_ValidKeys(t *testing.T) {
 		{name: "not_started", key: "not_started", expected: NotStarted},
 		{name: "done", key: "done", expected: Done},
 		{name: "needs_update", key: "needs_update", expected: NeedsUpdate},
+		{name: "shaping", key: "shaping", expected: Shaping},
 		{name: "unknown", key: "unknown", expected: Unknown},
 	}
 
@@ -365,7 +372,7 @@ func TestParseStatusKey_Whitespace(t *testing.T) {
 
 func TestStatusKey_Roundtrip(t *testing.T) {
 	// Verify that Key() -> ParseStatusKey() round-trips for all known statuses
-	statuses := []Status{OnTrack, AtRisk, OffTrack, NotStarted, Done, NeedsUpdate, Unknown}
+	statuses := []Status{OnTrack, AtRisk, OffTrack, NotStarted, Done, NeedsUpdate, Shaping, Unknown}
 
 	for _, status := range statuses {
 		key := status.Key()

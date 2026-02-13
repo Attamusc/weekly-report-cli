@@ -19,6 +19,9 @@ const (
 	// NoteSentimentMismatch indicates the AI detected a mismatch between the
 	// reported status and the content of the updates
 	NoteSentimentMismatch
+	// NoteNewIssueShaping indicates the issue was created within the reporting
+	// period and has no update comments yet
+	NoteNewIssueShaping
 )
 
 // Note represents a note entry about an issue's status reporting
@@ -77,6 +80,10 @@ func renderNoteBullet(note Note) string {
 	case NoteSentimentMismatch:
 		return fmt.Sprintf("%s: reported as %s, but sentiment suggests %s — %s",
 			note.IssueURL, note.ReportedStatus, note.SuggestedStatus, note.Explanation)
+
+	case NoteNewIssueShaping:
+		return fmt.Sprintf("%s: new issue — still being shaped",
+			note.IssueURL)
 
 	default:
 		// Unknown note kind, return empty string

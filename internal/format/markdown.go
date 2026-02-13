@@ -129,7 +129,7 @@ func getSortPriority(row Row) int {
 	}
 
 	// Priority 3: Needs updates or not started (lowest priority among undated items)
-	if row.StatusCaption == "Needs Update" || row.StatusCaption == "Not Started" {
+	if row.StatusCaption == "Needs Update" || row.StatusCaption == "Not Started" || row.StatusCaption == "Shaping" {
 		return 3
 	}
 

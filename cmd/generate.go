@@ -348,6 +348,7 @@ type IssueData struct {
 	IssueURL              string
 	IssueTitle            string
 	IssueState            string
+	CreatedAt             time.Time
 	ClosedAt              *time.Time
 	CloseReason           string
 	Reports               []report.Report
@@ -415,6 +416,32 @@ func batchSummarize(ctx context.Context, summarizer ai.Summarizer, allData []Iss
 	return summaries, nil
 }
 
+// applyNoCommentFallback sets the result fields for an issue that has no usable
+// comments. If the issue was created within the reporting window it is marked as
+// Shaping; otherwise it is marked as NeedsUpdate.
+func applyNoCommentFallback(result *IssueData, issueURL string, since time.Time, sinceDays int, noUpdateMsg string) {
+	if !result.CreatedAt.IsZero() && result.CreatedAt.After(since) {
+		result.Status = derive.Shaping
+		result.ReportedStatusCaption = derive.Shaping.Caption
+		result.ShouldSummarize = false
+		result.FallbackSummary = "New issue — still being shaped"
+		result.Note = &format.Note{
+			Kind:     format.NoteNewIssueShaping,
+			IssueURL: issueURL,
+		}
+	} else {
+		result.Status = derive.NeedsUpdate
+		result.ReportedStatusCaption = derive.NeedsUpdate.Caption
+		result.ShouldSummarize = false
+		result.FallbackSummary = noUpdateMsg
+		result.Note = &format.Note{
+			Kind:      format.NoteNoUpdatesInWindow,
+			IssueURL:  issueURL,
+			SinceDays: sinceDays,
+		}
+	}
+}
+
 // collectIssueData fetches GitHub data and extracts reports without AI summarization
 func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.IssueRef, since time.Time, sinceDays int) (IssueData, error) {
 	// Get logger from context
@@ -444,6 +471,7 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 		IssueURL:    ref.URL,
 		IssueTitle:  issueData.Title,
 		IssueState:  issueData.State,
+		CreatedAt:   issueData.CreatedAt,
 		ClosedAt:    issueData.ClosedAt,
 		CloseReason: issueData.CloseReason,
 		Reports:     reports,
@@ -471,16 +499,8 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 				IssueURL: ref.URL,
 			}
 		} else {
-			// No comments at all - needs update
-			result.Status = derive.NeedsUpdate
-			result.ReportedStatusCaption = derive.NeedsUpdate.Caption
-			result.ShouldSummarize = false
-			result.FallbackSummary = fmt.Sprintf("No update provided in last %d days", sinceDays)
-			result.Note = &format.Note{
-				Kind:      format.NoteNoUpdatesInWindow,
-				IssueURL:  ref.URL,
-				SinceDays: sinceDays,
-			}
+			applyNoCommentFallback(&result, ref.URL, since, sinceDays,
+				fmt.Sprintf("No update provided in last %d days", sinceDays))
 		}
 		return result, nil
 	}
@@ -522,16 +542,8 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 				IssueURL: ref.URL,
 			}
 		} else {
-			// No comments at all - needs update
-			result.Status = derive.NeedsUpdate
-			result.ReportedStatusCaption = derive.NeedsUpdate.Caption
-			result.ShouldSummarize = false
-			result.FallbackSummary = fmt.Sprintf("No structured update found in last %d days", sinceDays)
-			result.Note = &format.Note{
-				Kind:      format.NoteNoUpdatesInWindow,
-				IssueURL:  ref.URL,
-				SinceDays: sinceDays,
-			}
+			applyNoCommentFallback(&result, ref.URL, since, sinceDays,
+				fmt.Sprintf("No structured update found in last %d days", sinceDays))
 		}
 		return result, nil
 	}

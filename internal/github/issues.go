@@ -29,6 +29,7 @@ type IssueData struct {
 	Body        string     // Issue body/description
 	Labels      []string   // Issue labels
 	Assignees   []string   // Issue assignees (usernames)
+	CreatedAt   time.Time  // When the issue was created
 	ClosedAt    *time.Time // When the issue was closed (nil if open)
 	CloseReason string     // Text from the closing comment (empty if no comment or open issue)
 }
@@ -84,6 +85,7 @@ func FetchIssue(ctx context.Context, client *github.Client, ref input.IssueRef) 
 		Body:      issue.GetBody(),
 		Labels:    labels,
 		Assignees: assignees,
+		CreatedAt: issue.GetCreatedAt().Time,
 	}
 
 	// If issue is closed, get additional closing information

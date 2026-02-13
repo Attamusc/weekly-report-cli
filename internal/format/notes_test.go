@@ -156,6 +156,31 @@ func TestRenderNotes(t *testing.T) {
 			},
 			expected: "## Notes\n\n- https://github.com/owner/repo/issues/1: multiple structured updates in last 7 days\n- https://github.com/owner/repo/issues/2: reported as On Track, but sentiment suggests Off Track \u2014 Blocked on upstream dependency.\n",
 		},
+		{
+			name: "new issue shaping note",
+			notes: []Note{
+				{
+					Kind:     NoteNewIssueShaping,
+					IssueURL: "https://github.com/owner/repo/issues/77",
+				},
+			},
+			expected: "## Notes\n\n- https://github.com/owner/repo/issues/77: new issue \u2014 still being shaped\n",
+		},
+		{
+			name: "mixed notes including new issue shaping",
+			notes: []Note{
+				{
+					Kind:      NoteNoUpdatesInWindow,
+					IssueURL:  "https://github.com/owner/repo/issues/1",
+					SinceDays: 7,
+				},
+				{
+					Kind:     NoteNewIssueShaping,
+					IssueURL: "https://github.com/owner/repo/issues/2",
+				},
+			},
+			expected: "## Notes\n\n- https://github.com/owner/repo/issues/1: no update in last 7 days\n- https://github.com/owner/repo/issues/2: new issue \u2014 still being shaped\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -229,6 +254,14 @@ func TestRenderNoteBullet(t *testing.T) {
 				Explanation:     "Content describes unresolved blockers.",
 			},
 			expected: "https://github.com/owner/repo/issues/55: reported as On Track, but sentiment suggests At Risk \u2014 Content describes unresolved blockers.",
+		},
+		{
+			name: "new issue shaping",
+			note: Note{
+				Kind:     NoteNewIssueShaping,
+				IssueURL: "https://github.com/owner/repo/issues/77",
+			},
+			expected: "https://github.com/owner/repo/issues/77: new issue \u2014 still being shaped",
 		},
 		{
 			name: "unknown note kind",
@@ -313,6 +346,7 @@ func TestHasNotesOfKind(t *testing.T) {
 		{Kind: NoteMultipleUpdates, IssueURL: "url3", SinceDays: 3},
 		{Kind: NoteUnstructuredFallback, IssueURL: "url4"},
 		{Kind: NoteSentimentMismatch, IssueURL: "url5", ReportedStatus: "On Track", SuggestedStatus: "At Risk", Explanation: "blockers"},
+		{Kind: NoteNewIssueShaping, IssueURL: "url6"},
 	}
 
 	tests := []struct {
@@ -343,6 +377,12 @@ func TestHasNotesOfKind(t *testing.T) {
 			name:     "has sentiment mismatch",
 			notes:    notes,
 			kind:     NoteSentimentMismatch,
+			expected: true,
+		},
+		{
+			name:     "has new issue shaping",
+			notes:    notes,
+			kind:     NoteNewIssueShaping,
 			expected: true,
 		},
 		{

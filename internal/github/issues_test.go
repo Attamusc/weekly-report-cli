@@ -14,6 +14,8 @@ import (
 )
 
 func TestFetchIssue_Open(t *testing.T) {
+	createTime := time.Date(2025, 7, 10, 9, 0, 0, 0, time.UTC)
+
 	// Create test server that simulates GitHub API
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/owner/repo/issues/123" {
@@ -24,9 +26,10 @@ func TestFetchIssue_Open(t *testing.T) {
 
 		// Return mock open issue data
 		issue := github.Issue{
-			HTMLURL: github.String("https://github.com/owner/repo/issues/123"),
-			Title:   github.String("Test Issue Title"),
-			State:   github.String("open"),
+			HTMLURL:   github.String("https://github.com/owner/repo/issues/123"),
+			Title:     github.String("Test Issue Title"),
+			State:     github.String("open"),
+			CreatedAt: &github.Timestamp{Time: createTime},
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -64,6 +67,11 @@ func TestFetchIssue_Open(t *testing.T) {
 	if issueData.State != "open" {
 		t.Errorf("expected state 'open', got %s", issueData.State)
 	}
+	if issueData.CreatedAt.IsZero() {
+		t.Error("expected CreatedAt to be set")
+	} else if !issueData.CreatedAt.Equal(createTime) {
+		t.Errorf("expected CreatedAt %v, got %v", createTime, issueData.CreatedAt)
+	}
 	if issueData.ClosedAt != nil {
 		t.Errorf("expected ClosedAt to be nil for open issue, got %v", issueData.ClosedAt)
 	}
@@ -73,6 +81,7 @@ func TestFetchIssue_Open(t *testing.T) {
 }
 
 func TestFetchIssue_Closed(t *testing.T) {
+	createTime := time.Date(2025, 7, 1, 10, 0, 0, 0, time.UTC)
 	closeTime := time.Date(2025, 8, 15, 12, 30, 0, 0, time.UTC)
 
 	// Create test server that simulates GitHub API for closed issue
@@ -81,10 +90,11 @@ func TestFetchIssue_Closed(t *testing.T) {
 		case "/repos/owner/repo/issues/456":
 			// Return mock closed issue data
 			issue := github.Issue{
-				HTMLURL:  github.String("https://github.com/owner/repo/issues/456"),
-				Title:    github.String("Closed Test Issue"),
-				State:    github.String("closed"),
-				ClosedAt: &github.Timestamp{Time: closeTime},
+				HTMLURL:   github.String("https://github.com/owner/repo/issues/456"),
+				Title:     github.String("Closed Test Issue"),
+				State:     github.String("closed"),
+				CreatedAt: &github.Timestamp{Time: createTime},
+				ClosedAt:  &github.Timestamp{Time: closeTime},
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(issue)
@@ -153,6 +163,11 @@ func TestFetchIssue_Closed(t *testing.T) {
 	}
 	if issueData.State != "closed" {
 		t.Errorf("expected state 'closed', got %s", issueData.State)
+	}
+	if issueData.CreatedAt.IsZero() {
+		t.Error("expected CreatedAt to be set")
+	} else if !issueData.CreatedAt.Equal(createTime) {
+		t.Errorf("expected CreatedAt %v, got %v", createTime, issueData.CreatedAt)
 	}
 	if issueData.ClosedAt == nil {
 		t.Error("expected ClosedAt to be set for closed issue")

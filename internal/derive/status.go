@@ -18,6 +18,7 @@ var (
 	OffTrack    = Status{Emoji: ":red_circle:", Caption: "Off Track"}
 	NotStarted  = Status{Emoji: ":white_circle:", Caption: "Not Started"}
 	NeedsUpdate = Status{Emoji: ":white_circle:", Caption: "Needs Update"}
+	Shaping     = Status{Emoji: ":diamond_shape_with_a_dot_inside:", Caption: "Shaping"}
 	Done        = Status{Emoji: ":purple_circle:", Caption: "Done"}
 	Unknown     = Status{Emoji: ":black_circle:", Caption: "Unknown"}
 )
@@ -108,6 +109,8 @@ func (s Status) Key() string {
 		return "done"
 	case NeedsUpdate:
 		return "needs_update"
+	case Shaping:
+		return "shaping"
 	case Unknown:
 		return statusKeyUnknown
 	default:
@@ -131,6 +134,8 @@ func ParseStatusKey(key string) (Status, bool) {
 		return Done, true
 	case "needs_update":
 		return NeedsUpdate, true
+	case "shaping":
+		return Shaping, true
 	case statusKeyUnknown:
 		return Unknown, true
 	default:

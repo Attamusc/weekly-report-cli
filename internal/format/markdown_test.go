@@ -543,12 +543,14 @@ func TestSortRowsByPriority(t *testing.T) {
 				{EpicTitle: "Priority 1", TargetDate: utcTime(2025, 6, 1), StatusCaption: "On Track"},
 				{EpicTitle: "Priority 2", TargetDate: nil, StatusCaption: "At Risk"},
 				{EpicTitle: "Priority 3 B", TargetDate: nil, StatusCaption: "Not Started"},
+				{EpicTitle: "Priority 3 C", TargetDate: nil, StatusCaption: "Shaping"},
 			},
 			expected: []string{
 				"Priority 1",   // Priority 1: Has date
 				"Priority 2",   // Priority 2: Has updates
 				"Priority 3 A", // Priority 3: Needs updates
 				"Priority 3 B", // Priority 3: Not started
+				"Priority 3 C", // Priority 3: Shaping
 			},
 		},
 	}
@@ -633,6 +635,14 @@ func TestGetSortPriority(t *testing.T) {
 				StatusCaption: "Off Track",
 			},
 			expectedPriority: 2,
+		},
+		{
+			name: "shaping, no date - priority 3",
+			row: Row{
+				TargetDate:    nil,
+				StatusCaption: "Shaping",
+			},
+			expectedPriority: 3,
 		},
 	}
 
