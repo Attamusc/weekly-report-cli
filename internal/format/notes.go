@@ -22,6 +22,12 @@ const (
 	// NoteNewIssueShaping indicates the issue was created within the reporting
 	// period and has no update comments yet
 	NoteNewIssueShaping
+	// NoteSemiStructuredFallback indicates the status/update was derived from a
+	// comment using markdown headings rather than structured HTML markers.
+	NoteSemiStructuredFallback
+	// NoteLabelFallback indicates the status was derived from an issue label
+	// because no comment-based status signal was found.
+	NoteLabelFallback
 )
 
 // Note represents a note entry about an issue's status reporting
@@ -83,6 +89,15 @@ func renderNoteBullet(note Note) string {
 
 	case NoteNewIssueShaping:
 		return fmt.Sprintf("%s: new issue — still being shaped",
+			note.IssueURL)
+
+	case NoteSemiStructuredFallback:
+		return fmt.Sprintf(
+			"%s: status derived from markdown-formatted comment (not structured report)",
+			note.IssueURL)
+
+	case NoteLabelFallback:
+		return fmt.Sprintf("%s: status derived from issue label",
 			note.IssueURL)
 
 	default:

@@ -444,3 +444,129 @@ func TestCircleEmojiRegex(t *testing.T) {
 		})
 	}
 }
+
+func TestMatchLabelPattern(t *testing.T) {
+	tests := []struct {
+		name       string
+		label      string
+		wantStatus Status
+		wantOK     bool
+	}{
+		// Exact matches
+		{name: "exact on track", label: "on track", wantStatus: OnTrack, wantOK: true},
+		{name: "exact blocked", label: "blocked", wantStatus: OffTrack, wantOK: true},
+		{name: "exact done", label: "done", wantStatus: Done, wantOK: true},
+		{name: "exact at risk", label: "at risk", wantStatus: AtRisk, wantOK: true},
+		{name: "exact not started", label: "not started", wantStatus: NotStarted, wantOK: true},
+		{name: "exact complete", label: "complete", wantStatus: Done, wantOK: true},
+		{name: "exact completed", label: "completed", wantStatus: Done, wantOK: true},
+
+		// Case insensitivity
+		{name: "uppercase ON TRACK", label: "ON TRACK", wantStatus: OnTrack, wantOK: true},
+		{name: "mixed case At Risk", label: "At Risk", wantStatus: AtRisk, wantOK: true},
+		{name: "uppercase BLOCKED", label: "BLOCKED", wantStatus: OffTrack, wantOK: true},
+
+		// Word boundary: label contains pattern as whole words
+		{name: "contains on track", label: "is on track", wantStatus: OnTrack, wantOK: true},
+		{name: "contains blocked", label: "currently blocked", wantStatus: OffTrack, wantOK: true},
+
+		// Word boundary: rejects false positives (substring within another word)
+		{name: "rejects greenfield", label: "greenfield", wantStatus: Unknown, wantOK: false},
+		{name: "rejects deprecated", label: "deprecated", wantStatus: Unknown, wantOK: false},
+		{name: "rejects featured", label: "featured", wantStatus: Unknown, wantOK: false},
+		{name: "rejects whitelisted", label: "whitelisted", wantStatus: Unknown, wantOK: false},
+		{name: "rejects undone", label: "undone", wantStatus: Unknown, wantOK: false},
+
+		// Emoji patterns skipped (labels don't use status emojis)
+		{name: "emoji label ignored", label: "🟢", wantStatus: Unknown, wantOK: false},
+		{name: "emoji label red ignored", label: "🔴", wantStatus: Unknown, wantOK: false},
+
+		// Edge cases
+		{name: "empty label", label: "", wantStatus: Unknown, wantOK: false},
+		{name: "whitespace only", label: "   ", wantStatus: Unknown, wantOK: false},
+		{name: "unrelated label", label: "epic", wantStatus: Unknown, wantOK: false},
+		{name: "unrelated label bug", label: "bug", wantStatus: Unknown, wantOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, ok := matchLabelPattern(tt.label)
+			if ok != tt.wantOK {
+				t.Errorf("matchLabelPattern(%q) ok = %t, want %t", tt.label, ok, tt.wantOK)
+			}
+			if status != tt.wantStatus {
+				t.Errorf("matchLabelPattern(%q) = %+v, want %+v", tt.label, status, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestMapLabelsToStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		labels     []string
+		wantStatus Status
+		wantOK     bool
+	}{
+		{
+			name:       "single matching label",
+			labels:     []string{"on track"},
+			wantStatus: OnTrack,
+			wantOK:     true,
+		},
+		{
+			name:       "case variations",
+			labels:     []string{"At Risk"},
+			wantStatus: AtRisk,
+			wantOK:     true,
+		},
+		{
+			name:       "multiple labels first match wins",
+			labels:     []string{"epic", "at risk"},
+			wantStatus: AtRisk,
+			wantOK:     true,
+		},
+		{
+			name:       "no matching labels",
+			labels:     []string{"epic", "bug", "enhancement"},
+			wantStatus: Unknown,
+			wantOK:     false,
+		},
+		{
+			name:       "empty labels",
+			labels:     []string{},
+			wantStatus: Unknown,
+			wantOK:     false,
+		},
+		{
+			name:       "nil labels",
+			labels:     nil,
+			wantStatus: Unknown,
+			wantOK:     false,
+		},
+		{
+			name:       "rejects false positives in label set",
+			labels:     []string{"greenfield", "deprecated", "featured"},
+			wantStatus: Unknown,
+			wantOK:     false,
+		},
+		{
+			name:       "matching after non-matching",
+			labels:     []string{"greenfield", "blocked"},
+			wantStatus: OffTrack,
+			wantOK:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, ok := MapLabelsToStatus(tt.labels)
+			if ok != tt.wantOK {
+				t.Errorf("MapLabelsToStatus(%v) ok = %t, want %t", tt.labels, ok, tt.wantOK)
+			}
+			if status != tt.wantStatus {
+				t.Errorf("MapLabelsToStatus(%v) = %+v, want %+v", tt.labels, status, tt.wantStatus)
+			}
+		})
+	}
+}

@@ -181,6 +181,44 @@ func TestRenderNotes(t *testing.T) {
 			},
 			expected: "## Notes\n\n- https://github.com/owner/repo/issues/1: no update in last 7 days\n- https://github.com/owner/repo/issues/2: new issue \u2014 still being shaped\n",
 		},
+		{
+			name: "semi-structured fallback note",
+			notes: []Note{
+				{
+					Kind:     NoteSemiStructuredFallback,
+					IssueURL: "https://github.com/owner/repo/issues/88",
+				},
+			},
+			expected: "## Notes\n\n- https://github.com/owner/repo/issues/88: status derived from markdown-formatted comment (not structured report)\n",
+		},
+		{
+			name: "label fallback note",
+			notes: []Note{
+				{
+					Kind:     NoteLabelFallback,
+					IssueURL: "https://github.com/owner/repo/issues/99",
+				},
+			},
+			expected: "## Notes\n\n- https://github.com/owner/repo/issues/99: status derived from issue label\n",
+		},
+		{
+			name: "mixed notes including all fallback types",
+			notes: []Note{
+				{
+					Kind:     NoteSemiStructuredFallback,
+					IssueURL: "https://github.com/owner/repo/issues/1",
+				},
+				{
+					Kind:     NoteLabelFallback,
+					IssueURL: "https://github.com/owner/repo/issues/2",
+				},
+				{
+					Kind:     NoteUnstructuredFallback,
+					IssueURL: "https://github.com/owner/repo/issues/3",
+				},
+			},
+			expected: "## Notes\n\n- https://github.com/owner/repo/issues/1: status derived from markdown-formatted comment (not structured report)\n- https://github.com/owner/repo/issues/2: status derived from issue label\n- https://github.com/owner/repo/issues/3: no structured update found \u2014 summary derived from most recent comment\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -262,6 +300,22 @@ func TestRenderNoteBullet(t *testing.T) {
 				IssueURL: "https://github.com/owner/repo/issues/77",
 			},
 			expected: "https://github.com/owner/repo/issues/77: new issue \u2014 still being shaped",
+		},
+		{
+			name: "semi-structured fallback",
+			note: Note{
+				Kind:     NoteSemiStructuredFallback,
+				IssueURL: "https://github.com/owner/repo/issues/88",
+			},
+			expected: "https://github.com/owner/repo/issues/88: status derived from markdown-formatted comment (not structured report)",
+		},
+		{
+			name: "label fallback",
+			note: Note{
+				Kind:     NoteLabelFallback,
+				IssueURL: "https://github.com/owner/repo/issues/99",
+			},
+			expected: "https://github.com/owner/repo/issues/99: status derived from issue label",
 		},
 		{
 			name: "unknown note kind",
@@ -347,6 +401,8 @@ func TestHasNotesOfKind(t *testing.T) {
 		{Kind: NoteUnstructuredFallback, IssueURL: "url4"},
 		{Kind: NoteSentimentMismatch, IssueURL: "url5", ReportedStatus: "On Track", SuggestedStatus: "At Risk", Explanation: "blockers"},
 		{Kind: NoteNewIssueShaping, IssueURL: "url6"},
+		{Kind: NoteSemiStructuredFallback, IssueURL: "url7"},
+		{Kind: NoteLabelFallback, IssueURL: "url8"},
 	}
 
 	tests := []struct {
@@ -383,6 +439,18 @@ func TestHasNotesOfKind(t *testing.T) {
 			name:     "has new issue shaping",
 			notes:    notes,
 			kind:     NoteNewIssueShaping,
+			expected: true,
+		},
+		{
+			name:     "has semi-structured fallback",
+			notes:    notes,
+			kind:     NoteSemiStructuredFallback,
+			expected: true,
+		},
+		{
+			name:     "has label fallback",
+			notes:    notes,
+			kind:     NoteLabelFallback,
 			expected: true,
 		},
 		{

@@ -227,6 +227,106 @@ func TestSelectReports_MixedValidAndInvalid(t *testing.T) {
 	}
 }
 
+// ========== SelectSemiStructuredReports Tests ==========
+
+func TestSelectSemiStructuredReports_MixedComments(t *testing.T) {
+	baseTime := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+	sinceTime := baseTime.Add(24 * time.Hour) // 2025-03-02
+
+	comments := []github.Comment{
+		{
+			// Structured report (has HTML markers) -- should NOT be selected
+			Body: `<!-- data key="isReport" value="true" -->
+<!-- data key="trending" start -->🟢 on track<!-- data end -->
+<!-- data key="update" start -->Structured update<!-- data end -->`,
+			CreatedAt: sinceTime.Add(1 * time.Hour),
+			Author:    "user1",
+			URL:       "structured-url",
+		},
+		{
+			// Semi-structured (markdown headings, no HTML markers) -- should be selected
+			Body: `### Trending
+
+🟡 at risk
+
+### Update
+
+Semi-structured update here.
+`,
+			CreatedAt: sinceTime.Add(2 * time.Hour),
+			Author:    "user2",
+			URL:       "semi-url-1",
+		},
+		{
+			// Regular comment (no report at all) -- should NOT be selected
+			Body:      "Just a regular discussion comment.",
+			CreatedAt: sinceTime.Add(3 * time.Hour),
+			Author:    "user3",
+			URL:       "regular-url",
+		},
+		{
+			// Another semi-structured -- should be selected
+			Body: `### Trending
+
+🔴 blocked
+`,
+			CreatedAt: sinceTime.Add(4 * time.Hour),
+			Author:    "user4",
+			URL:       "semi-url-2",
+		},
+	}
+
+	reports := SelectSemiStructuredReports(comments, sinceTime)
+
+	if len(reports) != 2 {
+		t.Fatalf("expected 2 semi-structured reports, got %d", len(reports))
+	}
+
+	// Should be sorted newest-first
+	if reports[0].TrendingRaw != "🔴 blocked" {
+		t.Errorf("expected first report trending '🔴 blocked', got %q", reports[0].TrendingRaw)
+	}
+	if reports[1].TrendingRaw != "🟡 at risk" {
+		t.Errorf("expected second report trending '🟡 at risk', got %q", reports[1].TrendingRaw)
+	}
+}
+
+func TestSelectSemiStructuredReports_TimeFiltering(t *testing.T) {
+	baseTime := time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC)
+	sinceTime := baseTime.Add(24 * time.Hour) // 2025-03-02
+
+	comments := []github.Comment{
+		{
+			// Before the window -- should NOT be selected
+			Body:      "### Trending\n\n🟢 on track\n",
+			CreatedAt: baseTime, // 2025-03-01
+			URL:       "old-url",
+		},
+		{
+			// In the window -- should be selected
+			Body:      "### Trending\n\n🟢 on track\n",
+			CreatedAt: sinceTime.Add(1 * time.Hour),
+			URL:       "new-url",
+		},
+	}
+
+	reports := SelectSemiStructuredReports(comments, sinceTime)
+
+	if len(reports) != 1 {
+		t.Fatalf("expected 1 report, got %d", len(reports))
+	}
+	if reports[0].SourceURL != "new-url" {
+		t.Errorf("expected report from 'new-url', got %q", reports[0].SourceURL)
+	}
+}
+
+func TestSelectSemiStructuredReports_Empty(t *testing.T) {
+	reports := SelectSemiStructuredReports([]github.Comment{}, time.Now())
+	if len(reports) != 0 {
+		t.Errorf("expected 0 reports for empty input, got %d", len(reports))
+	}
+}
+
 func TestSelectMostRecentComment(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -351,6 +351,7 @@ type IssueData struct {
 	CreatedAt             time.Time
 	ClosedAt              *time.Time
 	CloseReason           string
+	Labels                []string // Issue labels (for status fallback)
 	Reports               []report.Report
 	UpdateTexts           []string // Raw updates (newest first)
 	Status                derive.Status
@@ -442,6 +443,27 @@ func applyNoCommentFallback(result *IssueData, issueURL string, since time.Time,
 	}
 }
 
+// applyLabelFallback checks whether the issue status is Unknown and, if so,
+// attempts to derive a status from the issue labels. The note is only set if no
+// higher-priority note is already present.
+func applyLabelFallback(result *IssueData, issueURL string) {
+	if result.Status != derive.Unknown {
+		return
+	}
+	labelStatus, ok := derive.MapLabelsToStatus(result.Labels)
+	if !ok {
+		return
+	}
+	result.Status = labelStatus
+	result.ReportedStatusCaption = labelStatus.Caption
+	if result.Note == nil {
+		result.Note = &format.Note{
+			Kind:     format.NoteLabelFallback,
+			IssueURL: issueURL,
+		}
+	}
+}
+
 // collectIssueData fetches GitHub data and extracts reports without AI summarization
 func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.IssueRef, since time.Time, sinceDays int) (IssueData, error) {
 	// Get logger from context
@@ -474,10 +496,25 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 		CreatedAt:   issueData.CreatedAt,
 		ClosedAt:    issueData.ClosedAt,
 		CloseReason: issueData.CloseReason,
+		Labels:      issueData.Labels,
 		Reports:     reports,
 	}
 
-	// Case 1: No reports found
+	// Case 1: No structured reports found
+	if len(reports) == 0 {
+		// Try semi-structured comments before falling back
+		semiReports := report.SelectSemiStructuredReports(comments, since)
+		if len(semiReports) > 0 {
+			// Promote to Case 2 — we have usable reports from markdown-headed comments
+			reports = semiReports
+			result.Reports = reports
+			result.Note = &format.Note{
+				Kind:     format.NoteSemiStructuredFallback,
+				IssueURL: ref.URL,
+			}
+		}
+	}
+
 	if len(reports) == 0 {
 		if issueData.State == github.StateClosed {
 			// Issue is closed - use Done status, no AI needed
@@ -502,6 +539,10 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 			applyNoCommentFallback(&result, ref.URL, since, sinceDays,
 				fmt.Sprintf("No update provided in last %d days", sinceDays))
 		}
+
+		// Label fallback: if status is still Unknown, try to derive from labels.
+		applyLabelFallback(&result, ref.URL)
+
 		return result, nil
 	}
 
@@ -519,6 +560,9 @@ func collectIssueData(ctx context.Context, client *githubapi.Client, ref input.I
 	result.Status = derive.MapTrending(newestReport.TrendingRaw)
 	result.ReportedStatusCaption = result.Status.Caption
 	result.TargetDate = derive.ParseTargetDate(newestReport.TargetDate)
+
+	// Label fallback: if MapTrending returned Unknown, try to derive from labels.
+	applyLabelFallback(&result, ref.URL)
 
 	// Case 2a: Reports exist but no update text
 	if len(updateTexts) == 0 {

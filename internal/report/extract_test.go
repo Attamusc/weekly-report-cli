@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -188,6 +189,287 @@ Multiple lines with    extra spaces
 	expectedUpdate := "Progress update with émojis and ünicode 🚀\nMultiple lines with    extra spaces"
 	if report.UpdateRaw != expectedUpdate {
 		t.Errorf("expected update with unicode:\n%s\ngot:\n%s", expectedUpdate, report.UpdateRaw)
+	}
+}
+
+// ========== ParseSemiStructured Tests ==========
+
+func TestParseSemiStructured_EmojiStatus(t *testing.T) {
+	body := "### Trending\n\n🟢 on track\n"
+	createdAt := time.Date(2025, 3, 5, 14, 0, 0, 0, time.UTC)
+	sourceURL := "https://github.com/owner/repo/issues/1#issuecomment-100"
+
+	report, ok := ParseSemiStructured(body, createdAt, sourceURL)
+	if !ok {
+		t.Fatal("expected successful semi-structured parsing")
+	}
+	if report.TrendingRaw != "🟢 on track" {
+		t.Errorf("expected trending '🟢 on track', got %q", report.TrendingRaw)
+	}
+	if report.CreatedAt != createdAt {
+		t.Errorf("expected CreatedAt %v, got %v", createdAt, report.CreatedAt)
+	}
+	if report.SourceURL != sourceURL {
+		t.Errorf("expected SourceURL %q, got %q", sourceURL, report.SourceURL)
+	}
+}
+
+func TestParseSemiStructured_TextStatus(t *testing.T) {
+	body := "### Trending\n\non track\n"
+
+	report, ok := ParseSemiStructured(body, time.Now(), "url")
+	if !ok {
+		t.Fatal("expected successful semi-structured parsing")
+	}
+	if report.TrendingRaw != "on track" {
+		t.Errorf("expected trending 'on track', got %q", report.TrendingRaw)
+	}
+}
+
+func TestParseSemiStructured_WithUpdate(t *testing.T) {
+	body := `### Trending
+
+🟢 on track
+
+### Update
+
+**Completed:** implemented the feature
+Added tests for all edge cases
+`
+
+	report, ok := ParseSemiStructured(body, time.Now(), "url")
+	if !ok {
+		t.Fatal("expected successful semi-structured parsing")
+	}
+	if report.TrendingRaw != "🟢 on track" {
+		t.Errorf("expected trending '🟢 on track', got %q", report.TrendingRaw)
+	}
+	if report.UpdateRaw == "" {
+		t.Fatal("expected non-empty UpdateRaw")
+	}
+	if !strings.Contains(report.UpdateRaw, "Completed") {
+		t.Errorf("expected update to contain 'Completed', got %q", report.UpdateRaw)
+	}
+}
+
+func TestParseSemiStructured_WithTargetDate(t *testing.T) {
+	body := `### Trending
+
+🟡 at risk
+
+### Target Date
+
+2025-08-15
+`
+
+	report, ok := ParseSemiStructured(body, time.Now(), "url")
+	if !ok {
+		t.Fatal("expected successful semi-structured parsing")
+	}
+	if report.TrendingRaw != "🟡 at risk" {
+		t.Errorf("expected trending '🟡 at risk', got %q", report.TrendingRaw)
+	}
+	if report.TargetDate != "2025-08-15" {
+		t.Errorf("expected target date '2025-08-15', got %q", report.TargetDate)
+	}
+}
+
+func TestParseSemiStructured_AllSections(t *testing.T) {
+	body := `### Trending
+
+🔴 blocked
+
+### Update
+
+Blocked on upstream dependency.
+Waiting for team to resolve issue.
+
+### Target Date
+
+2025-09-01
+`
+
+	report, ok := ParseSemiStructured(body, time.Now(), "url")
+	if !ok {
+		t.Fatal("expected successful semi-structured parsing")
+	}
+	if report.TrendingRaw != "🔴 blocked" {
+		t.Errorf("expected trending '🔴 blocked', got %q", report.TrendingRaw)
+	}
+	if !strings.Contains(report.UpdateRaw, "upstream dependency") {
+		t.Errorf("expected update to contain 'upstream dependency', got %q", report.UpdateRaw)
+	}
+	if report.TargetDate != "2025-09-01" {
+		t.Errorf("expected target date '2025-09-01', got %q", report.TargetDate)
+	}
+}
+
+func TestParseSemiStructured_DifferentHeadingLevels(t *testing.T) {
+	testCases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "h1 heading",
+			body: "# Trending\n\n🟢 on track\n",
+		},
+		{
+			name: "h2 heading",
+			body: "## Trending\n\n🟢 on track\n",
+		},
+		{
+			name: "h4 heading",
+			body: "#### Trending\n\n🟢 on track\n",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ok := ParseSemiStructured(tc.body, time.Now(), "url")
+			if !ok {
+				t.Errorf("expected successful parsing for %s", tc.name)
+			}
+		})
+	}
+}
+
+func TestParseSemiStructured_SubHeadingsPreserved(t *testing.T) {
+	body := `### Trending
+
+🟢 on track
+
+### Update
+
+#### Completed
+- Feature A done
+- Feature B done
+
+#### In Progress
+- Feature C started
+`
+
+	report, ok := ParseSemiStructured(body, time.Now(), "url")
+	if !ok {
+		t.Fatal("expected successful semi-structured parsing")
+	}
+	// Sub-headings (#### Completed, #### In Progress) should be preserved
+	// because knownSectionHeadingRegex only matches known headings
+	if !strings.Contains(report.UpdateRaw, "#### Completed") {
+		t.Errorf("expected update to preserve '#### Completed' sub-heading, got %q", report.UpdateRaw)
+	}
+	if !strings.Contains(report.UpdateRaw, "#### In Progress") {
+		t.Errorf("expected update to preserve '#### In Progress' sub-heading, got %q", report.UpdateRaw)
+	}
+}
+
+func TestParseSemiStructured_NoTrendingHeading(t *testing.T) {
+	body := `### Update
+
+Some update text here.
+`
+
+	_, ok := ParseSemiStructured(body, time.Now(), "url")
+	if ok {
+		t.Error("expected parsing to fail when no trending heading present")
+	}
+}
+
+func TestParseSemiStructured_UnrecognizedTrending(t *testing.T) {
+	body := `### Trending
+
+just some random text about project management
+`
+
+	_, ok := ParseSemiStructured(body, time.Now(), "url")
+	if ok {
+		t.Error("expected parsing to fail when trending text is unrecognized")
+	}
+}
+
+func TestParseSemiStructured_HasHTMLMarkers(t *testing.T) {
+	body := `<!-- data key="isReport" value="true" -->
+### Trending
+
+🟢 on track
+`
+
+	_, ok := ParseSemiStructured(body, time.Now(), "url")
+	if ok {
+		t.Error("expected parsing to fail when HTML report markers are present")
+	}
+}
+
+func TestParseSemiStructured_EmptyBody(t *testing.T) {
+	_, ok := ParseSemiStructured("", time.Now(), "url")
+	if ok {
+		t.Error("expected parsing to fail for empty body")
+	}
+}
+
+func TestParseSemiStructured_WhitespaceAroundHeading(t *testing.T) {
+	// Extra whitespace around status text should be handled
+	body := "###   Trending  \n\n  🟢 on track  \n"
+
+	report, ok := ParseSemiStructured(body, time.Now(), "url")
+	if !ok {
+		t.Fatal("expected successful parsing with whitespace around heading")
+	}
+	if report.TrendingRaw != "🟢 on track" {
+		t.Errorf("expected trimmed trending '🟢 on track', got %q", report.TrendingRaw)
+	}
+}
+
+func TestParseSemiStructured_EmptyTrendingContent(t *testing.T) {
+	body := "### Trending\n\n### Update\n\nSome update\n"
+
+	_, ok := ParseSemiStructured(body, time.Now(), "url")
+	if ok {
+		t.Error("expected parsing to fail when trending section is empty")
+	}
+}
+
+func TestParseSemiStructured_KnownLimitation_SubstringMatch(t *testing.T) {
+	// Known limitation: MapTrending() uses substring matching, so "green with envy"
+	// matches OnTrack via the "green" pattern. This is inherited from MapTrending()
+	// and is not a new bug introduced by ParseSemiStructured().
+	body := "### Trending\n\ngreen with envy\n"
+
+	_, ok := ParseSemiStructured(body, time.Now(), "url")
+	if !ok {
+		t.Log("Known limitation: 'green with envy' matches OnTrack via substring match in MapTrending()")
+		t.Fatal("expected this known limitation to cause a match (test documents inherited behavior)")
+	}
+}
+
+func TestParseSemiStructured_RealWorldExample(t *testing.T) {
+	// Simulates the real-world example from github/graphql-platform#2458
+	body := `### Trending
+
+🟢 on track
+
+### Update
+
+**Completed:** Finished implementing the GraphQL schema changes.
+Updated documentation for the new endpoints.
+
+### Summary
+
+Overall the project is progressing well with no blockers.
+`
+
+	report, ok := ParseSemiStructured(body, time.Now(), "https://github.com/org/repo/issues/2458#issuecomment-999")
+	if !ok {
+		t.Fatal("expected successful parsing of real-world example")
+	}
+	if report.TrendingRaw != "🟢 on track" {
+		t.Errorf("expected trending '🟢 on track', got %q", report.TrendingRaw)
+	}
+	if !strings.Contains(report.UpdateRaw, "GraphQL schema changes") {
+		t.Errorf("expected update to contain 'GraphQL schema changes', got %q", report.UpdateRaw)
+	}
+	// TargetDate should be empty since no target date section
+	if report.TargetDate != "" {
+		t.Errorf("expected empty target date, got %q", report.TargetDate)
 	}
 }
 

@@ -61,32 +61,80 @@ const statusKeyUnknown = "unknown"
 // Circle emoji regex to strip leading emoji
 var circleEmojiRegex = regexp.MustCompile(`^[🟢🟡🔴⚪🟣]\s*`)
 
-// MapTrending maps a free-form trending status string to canonical Status
-// Handles case-insensitive matching, strips leading circle emojis, and normalizes whitespace
-func MapTrending(raw string) Status {
+// matchStatusPattern normalizes a raw string and attempts to match it against
+// known status patterns using substring matching. Returns (Status, true) on
+// match, (Unknown, false) otherwise.
+func matchStatusPattern(raw string) (Status, bool) {
 	if raw == "" {
-		return Unknown
+		return Unknown, false
 	}
 
-	// Normalize the input: strip leading circle emoji, trim whitespace, lowercase
 	normalized := circleEmojiRegex.ReplaceAllString(raw, "")
 	normalized = strings.TrimSpace(strings.ToLower(normalized))
 
 	if normalized == "" {
-		return Unknown
+		return Unknown, false
 	}
 
-	// Try to match against known patterns
 	for _, mapping := range statusMappings {
 		for _, pattern := range mapping.patterns {
 			if strings.Contains(normalized, pattern) {
-				return mapping.status
+				return mapping.status, true
 			}
 		}
 	}
 
-	// If no pattern matches, return unknown
-	return Unknown
+	return Unknown, false
+}
+
+// MapTrending maps a free-form trending status string to canonical Status.
+// Handles case-insensitive matching, strips leading circle emojis, and normalizes whitespace.
+func MapTrending(raw string) Status {
+	status, _ := matchStatusPattern(raw)
+	return status
+}
+
+// isEmojiPattern returns true if the pattern is a single emoji character
+// (used to skip emoji patterns when matching labels).
+func isEmojiPattern(s string) bool {
+	return s == "🟢" || s == "🟡" || s == "🔴" || s == "⚪" || s == "🟣"
+}
+
+// matchLabelPattern normalizes a label and attempts to match it against known
+// status patterns using word-boundary matching (stricter than the substring
+// matching used for trending values). Returns (Status, true) on match,
+// (Unknown, false) otherwise.
+func matchLabelPattern(label string) (Status, bool) {
+	normalized := strings.TrimSpace(strings.ToLower(label))
+	if normalized == "" {
+		return Unknown, false
+	}
+
+	padded := " " + normalized + " "
+	for _, mapping := range statusMappings {
+		for _, pattern := range mapping.patterns {
+			if isEmojiPattern(pattern) {
+				continue
+			}
+			if normalized == pattern || strings.Contains(padded, " "+pattern+" ") {
+				return mapping.status, true
+			}
+		}
+	}
+
+	return Unknown, false
+}
+
+// MapLabelsToStatus attempts to derive a status from issue labels using
+// word-boundary matching. Returns the first matching status and true, or
+// (Unknown, false) if no label matches a known status pattern.
+func MapLabelsToStatus(labels []string) (Status, bool) {
+	for _, label := range labels {
+		if status, ok := matchLabelPattern(label); ok {
+			return status, true
+		}
+	}
+	return Unknown, false
 }
 
 // String returns a formatted status string for display

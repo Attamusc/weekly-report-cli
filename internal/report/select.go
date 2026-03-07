@@ -34,6 +34,31 @@ func SelectReports(comments []github.Comment, since time.Time) []Report {
 	return reports
 }
 
+// SelectSemiStructuredReports extracts reports from comments that use markdown
+// heading format but lack HTML markers. Only considers comments within the time
+// window. Returns reports sorted newest-first.
+func SelectSemiStructuredReports(comments []github.Comment, since time.Time) []Report {
+	var reports []Report
+
+	for _, comment := range comments {
+		// Skip comments outside the time window
+		if comment.CreatedAt.Before(since) {
+			continue
+		}
+
+		if report, ok := ParseSemiStructured(comment.Body, comment.CreatedAt, comment.URL); ok {
+			reports = append(reports, report)
+		}
+	}
+
+	// Sort reports newest-first by CreatedAt
+	sort.Slice(reports, func(i, j int) bool {
+		return reports[i].CreatedAt.After(reports[j].CreatedAt)
+	})
+
+	return reports
+}
+
 // SelectMostRecentComment returns the most recent comment body from the
 // provided comments, or ("", false) if no comments exist or the most recent
 // comment has an empty body. Comments from the GitHub API are chronological
