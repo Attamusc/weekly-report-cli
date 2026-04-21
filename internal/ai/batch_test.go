@@ -514,3 +514,66 @@ func TestNoopSummarizer_SummarizeBatch(t *testing.T) {
 		t.Errorf("Expected nil sentiment from NoopSummarizer, got %+v", r3.Sentiment)
 	}
 }
+
+func TestNoopSummarizer_GenerateHeader(t *testing.T) {
+	s := NewNoopSummarizer()
+
+	t.Run("empty items returns empty string", func(t *testing.T) {
+		result, err := s.GenerateHeader(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "" {
+			t.Errorf("expected empty string, got %q", result)
+		}
+	})
+
+	t.Run("counts statuses correctly", func(t *testing.T) {
+		transition := "At Risk→On Track"
+		items := []HeaderItem{
+			{StatusCaption: "On Track", Title: "A", Summary: "s"},
+			{StatusCaption: "On Track", Title: "B", Summary: "s"},
+			{StatusCaption: "At Risk", Title: "C", Summary: "s", NewItem: true},
+			{StatusCaption: "Done", Title: "D", Summary: "s", StatusTransition: &transition},
+			{StatusCaption: "Done", Title: "E", Summary: "s", NewItem: true},
+		}
+		result, err := s.GenerateHeader(context.Background(), items)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(result, "5 items") {
+			t.Errorf("expected total count, got %q", result)
+		}
+		if !strings.Contains(result, "2 on track") {
+			t.Errorf("expected on track count, got %q", result)
+		}
+		if !strings.Contains(result, "1 at risk") {
+			t.Errorf("expected at risk count, got %q", result)
+		}
+		if !strings.Contains(result, "2 done") {
+			t.Errorf("expected done count, got %q", result)
+		}
+		if !strings.Contains(result, "2 new items") {
+			t.Errorf("expected new items count, got %q", result)
+		}
+		if !strings.Contains(result, "1 status changes") {
+			t.Errorf("expected status changes count, got %q", result)
+		}
+	})
+
+	t.Run("no new or transition items omits those phrases", func(t *testing.T) {
+		items := []HeaderItem{
+			{StatusCaption: "On Track", Title: "A", Summary: "s"},
+		}
+		result, err := s.GenerateHeader(context.Background(), items)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if strings.Contains(result, "new items") {
+			t.Errorf("should not mention new items, got %q", result)
+		}
+		if strings.Contains(result, "status changes") {
+			t.Errorf("should not mention status changes, got %q", result)
+		}
+	})
+}

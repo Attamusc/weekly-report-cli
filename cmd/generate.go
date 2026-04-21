@@ -28,6 +28,7 @@ var (
 	verbose          bool
 	quiet            bool
 	summaryPrompt    string
+	summaryHeader    bool
 
 	previousReportPath string
 
@@ -109,6 +110,7 @@ func init() {
 	generateCmd.Flags().BoolVar(&collapsibleNotes, "collapsible-notes", false, "Wrap notes section in collapsible <details> HTML block")
 	generateCmd.Flags().StringVar(&groupBy, "group-by", "", "Group rows by: assignee, label:<glob>, field:<name>")
 	generateCmd.Flags().StringVar(&columns, "columns", "", "Comma-separated project field names to show as extra columns (e.g., 'Priority,Sprint')")
+	generateCmd.Flags().BoolVar(&summaryHeader, "summary-header", false, "Generate an executive summary header above the report table")
 
 	generateProjectFlags = addProjectFlags(generateCmd)
 }
@@ -251,6 +253,26 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// ========== PHASE E: Generate executive summary header (optional) ==========
+	var headerText string
+	if summaryHeader {
+		headerItems := make([]ai.HeaderItem, len(rows))
+		for i, row := range rows {
+			headerItems[i] = ai.HeaderItem{
+				StatusCaption:    row.StatusCaption,
+				StatusTransition: row.StatusTransition,
+				NewItem:          row.NewItem,
+				Title:            row.EpicTitle,
+				Summary:          row.UpdateMD,
+			}
+		}
+		var err error
+		headerText, err = summarizer.GenerateHeader(ctx, headerItems)
+		if err != nil {
+			logger.Warn("Failed to generate summary header, skipping", "error", err)
+		}
+	}
+
 	// Parse --columns flag
 	var extraColumns []string
 	if columns != "" {
@@ -273,11 +295,11 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Generate output
-	return renderGenerateOutput(rows, notes, cfg, logger, extraColumns, groupConfig)
+	return renderGenerateOutput(rows, notes, cfg, logger, extraColumns, groupConfig, headerText)
 }
 
 // renderGenerateOutput sorts, renders, and prints the report output
-func renderGenerateOutput(rows []format.Row, notes []format.Note, cfg *config.Config, logger *slog.Logger, extraColumns []string, groupConfig *format.GroupConfig) error {
+func renderGenerateOutput(rows []format.Row, notes []format.Note, cfg *config.Config, logger *slog.Logger, extraColumns []string, groupConfig *format.GroupConfig, headerText string) error {
 	if len(rows) == 0 {
 		if !cfg.Quiet {
 			fmt.Fprintf(os.Stderr, "No report rows generated\n")
@@ -286,6 +308,11 @@ func renderGenerateOutput(rows []format.Row, notes []format.Note, cfg *config.Co
 	}
 
 	format.SortRowsByTargetDate(rows)
+
+	if headerText != "" {
+		fmt.Println(headerText)
+		fmt.Println()
+	}
 
 	logger.Info("Rendering output...", "rows", len(rows))
 	if groupConfig != nil {

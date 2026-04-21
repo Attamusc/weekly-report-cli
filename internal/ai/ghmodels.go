@@ -699,3 +699,35 @@ func (c *GHModelsClient) parseMarkdownDescribeResponse(response string, items []
 
 	return result, nil
 }
+
+// GenerateHeader produces an executive summary paragraph from assembled report data.
+func (c *GHModelsClient) GenerateHeader(ctx context.Context, items []HeaderItem) (string, error) {
+	logger := getContextLogger(ctx)
+	if len(items) == 0 {
+		return "", nil
+	}
+	logger.Debug("Generating executive summary header", "items", len(items))
+
+	type jsonItem struct {
+		Status     string  `json:"status"`
+		Transition *string `json:"transition"`
+		New        bool    `json:"new"`
+		Title      string  `json:"title"`
+		Summary    string  `json:"summary"`
+	}
+	jsonItems := make([]jsonItem, len(items))
+	for i, item := range items {
+		jsonItems[i] = jsonItem{
+			Status:     item.StatusCaption,
+			Transition: item.StatusTransition,
+			New:        item.NewItem,
+			Title:      item.Title,
+			Summary:    item.Summary,
+		}
+	}
+	jsonBytes, err := json.Marshal(jsonItems)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal header items: %w", err)
+	}
+	return c.callAPI(ctx, string(jsonBytes), headerSystemPrompt)
+}

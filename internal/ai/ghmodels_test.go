@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -431,5 +432,60 @@ func TestValidateWordCount(t *testing.T) {
 				t.Errorf("Test response %d has %d words, should exceed 35 words for validation test", i+1, wordCount)
 			}
 		}
+	}
+}
+
+func TestGHModelsClient_GenerateHeader(t *testing.T) {
+	transition := "At Risk→On Track"
+	items := []HeaderItem{
+		{StatusCaption: "On Track", Title: "Initiative A", Summary: "Making progress.", NewItem: false, StatusTransition: &transition},
+		{StatusCaption: "Done", Title: "Initiative B", Summary: "Completed.", NewItem: true},
+	}
+
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Good progress this week."}}]}`))
+	}))
+	defer server.Close()
+
+	client := NewGHModelsClient(server.URL, "test-model", "test-token", "", 10*time.Second)
+	result, err := client.GenerateHeader(context.Background(), items)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Good progress this week." {
+		t.Errorf("unexpected result: %q", result)
+	}
+
+	// Verify JSON payload contains header system prompt marker
+	var req map[string]interface{}
+	if err := json.Unmarshal(capturedBody, &req); err != nil {
+		t.Fatalf("failed to parse request body: %v", err)
+	}
+	messages, _ := req["messages"].([]interface{})
+	if len(messages) < 2 {
+		t.Fatalf("expected at least 2 messages, got %d", len(messages))
+	}
+	systemMsg, _ := messages[0].(map[string]interface{})
+	if !strings.Contains(systemMsg["content"].(string), "weekly engineering status report") {
+		t.Errorf("system prompt missing expected content, got %q", systemMsg["content"])
+	}
+	userMsg, _ := messages[1].(map[string]interface{})
+	if !strings.Contains(userMsg["content"].(string), "Initiative A") {
+		t.Errorf("user message missing item data, got %q", userMsg["content"])
+	}
+}
+
+func TestGHModelsClient_GenerateHeader_Empty(t *testing.T) {
+	client := NewGHModelsClient("http://unused", "model", "token", "", 10*time.Second)
+	result, err := client.GenerateHeader(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
 	}
 }
