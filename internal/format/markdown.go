@@ -11,12 +11,14 @@ import (
 
 // Row represents a single row in the markdown table
 type Row struct {
-	StatusEmoji   string     // Status emoji (e.g., ":green_circle:")
-	StatusCaption string     // Status caption (e.g., "On Track")
-	EpicTitle     string     // Epic/issue title
-	EpicURL       string     // Epic/issue URL
-	TargetDate    *time.Time // Target date (nil renders as "TBD")
-	UpdateMD      string     // Update summary/content (markdown-ready)
+	StatusEmoji      string     // Status emoji (e.g., ":green_circle:")
+	StatusCaption    string     // Status caption (e.g., "On Track")
+	StatusTransition *string    // e.g., ":yellow_circle:→:green_circle:" — rendered instead of emoji when set
+	NewItem          bool       // true if this item wasn't in the previous report
+	EpicTitle        string     // Epic/issue title
+	EpicURL          string     // Epic/issue URL
+	TargetDate       *time.Time // Target date (nil renders as "TBD")
+	UpdateMD         string     // Update summary/content (markdown-ready)
 }
 
 // NewRow creates a Row from components, handling status derivation and date parsing
@@ -47,7 +49,14 @@ func RenderTable(rows []Row) string {
 	// Write each row
 	for _, row := range rows {
 		// Format status column
-		statusCol := fmt.Sprintf("%s %s", row.StatusEmoji, row.StatusCaption)
+		var statusCol string
+		if row.NewItem {
+			statusCol = fmt.Sprintf("🆕 %s %s", row.StatusEmoji, row.StatusCaption)
+		} else if row.StatusTransition != nil {
+			statusCol = fmt.Sprintf("%s %s", *row.StatusTransition, row.StatusCaption)
+		} else {
+			statusCol = fmt.Sprintf("%s %s", row.StatusEmoji, row.StatusCaption)
+		}
 
 		// Format epic column with markdown link
 		epicCol := fmt.Sprintf("[%s](%s)",

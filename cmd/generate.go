@@ -10,6 +10,7 @@ import (
 
 	"github.com/Attamusc/weekly-report-cli/internal/ai"
 	"github.com/Attamusc/weekly-report-cli/internal/config"
+	"github.com/Attamusc/weekly-report-cli/internal/diff"
 	"github.com/Attamusc/weekly-report-cli/internal/format"
 	"github.com/Attamusc/weekly-report-cli/internal/input"
 	"github.com/Attamusc/weekly-report-cli/internal/pipeline"
@@ -17,14 +18,17 @@ import (
 )
 
 var (
-	sinceDays     int
-	inputPath     string
-	concurrency   int
-	noNotes       bool
-	noSentiment   bool
-	verbose       bool
-	quiet         bool
-	summaryPrompt string
+	sinceDays        int
+	inputPath        string
+	concurrency      int
+	noNotes          bool
+	collapsibleNotes bool
+	noSentiment      bool
+	verbose          bool
+	quiet            bool
+	summaryPrompt    string
+
+	previousReportPath string
 
 	generateProjectFlags *projectFlags
 )
@@ -86,6 +90,8 @@ func init() {
 	generateCmd.Flags().BoolVar(&verbose, "verbose", false, "Enable verbose progress output")
 	generateCmd.Flags().BoolVar(&quiet, "quiet", false, "Suppress all progress output")
 	generateCmd.Flags().StringVar(&summaryPrompt, "summary-prompt", "", "Custom prompt for AI summarization (uses default if empty)")
+	generateCmd.Flags().StringVar(&previousReportPath, "previous-report", "", "Path to previous report file for week-over-week diff")
+	generateCmd.Flags().BoolVar(&collapsibleNotes, "collapsible-notes", false, "Wrap notes section in collapsible <details> HTML block")
 
 	generateProjectFlags = addProjectFlags(generateCmd)
 }
@@ -206,6 +212,28 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	// ========== PHASE C: Create final results ==========
 	rows, notes := pipeline.AssembleGenerateResults(allData, batchResults, cfg.Models.Sentiment, logger)
 
+	// ========== PHASE D: Compare with previous report (if provided) ==========
+	if previousReportPath != "" {
+		logger.Info("Comparing with previous report", "path", previousReportPath)
+		prevContent, err := os.ReadFile(previousReportPath) //nolint:gosec // user-supplied CLI path
+		if err != nil {
+			logger.Warn("Could not read previous report, skipping diff", "error", err)
+		} else {
+			previousRows := diff.ParseReport(string(prevContent))
+			if len(previousRows) > 0 {
+				var diffNotes []format.Note
+				rows, diffNotes = diff.Compare(previousRows, rows)
+				notes = append(notes, diffNotes...)
+				logger.Info("Diff completed", "previous_rows", len(previousRows),
+					"transitions", format.CountNotesByKind(diffNotes, format.NoteStatusChanged),
+					"new", format.CountNotesByKind(diffNotes, format.NoteNewItem),
+					"removed", format.CountNotesByKind(diffNotes, format.NoteRemovedItem))
+			} else {
+				logger.Warn("Previous report contained no parseable rows, skipping diff")
+			}
+		}
+	}
+
 	// Generate output
 	return renderGenerateOutput(rows, notes, cfg, logger)
 }
@@ -228,7 +256,12 @@ func renderGenerateOutput(rows []format.Row, notes []format.Note, cfg *config.Co
 	if cfg.Notes && len(notes) > 0 {
 		logger.Debug("Adding notes section", "notes", len(notes))
 		fmt.Print("\n")
-		notesSection := format.RenderNotes(notes)
+		var notesSection string
+		if collapsibleNotes {
+			notesSection = format.RenderNotesCollapsible(notes)
+		} else {
+			notesSection = format.RenderNotes(notes)
+		}
 		fmt.Print(notesSection)
 	}
 

@@ -640,3 +640,90 @@ func TestNotesStructureAndFormat(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderNotesCollapsible_Empty(t *testing.T) {
+	result := RenderNotesCollapsible([]Note{})
+	if result != "" {
+		t.Errorf("Expected empty string for empty notes, got %q", result)
+	}
+}
+
+func TestRenderNotesCollapsible_Single(t *testing.T) {
+	notes := []Note{
+		{Kind: NoteNoUpdatesInWindow, IssueURL: "https://github.com/org/repo/issues/1", SinceDays: 7},
+	}
+	result := RenderNotesCollapsible(notes)
+
+	if !strings.Contains(result, "<details>") {
+		t.Error("Expected <details> tag")
+	}
+	if !strings.Contains(result, "<summary>📝 Notes (1)</summary>") {
+		t.Errorf("Expected summary with count 1, got %q", result)
+	}
+	if !strings.Contains(result, "</details>") {
+		t.Error("Expected </details> closing tag")
+	}
+}
+
+func TestRenderNotesCollapsible_Multiple(t *testing.T) {
+	notes := []Note{
+		{Kind: NoteNoUpdatesInWindow, IssueURL: "https://github.com/org/repo/issues/1", SinceDays: 7},
+		{Kind: NoteNewIssueShaping, IssueURL: "https://github.com/org/repo/issues/2"},
+	}
+	result := RenderNotesCollapsible(notes)
+
+	if !strings.Contains(result, "<summary>📝 Notes (2)</summary>") {
+		t.Errorf("Expected summary with count 2, got %q", result)
+	}
+	if !strings.Contains(result, "- https://github.com/org/repo/issues/1: no update in last 7 days") {
+		t.Errorf("Expected first bullet, got %q", result)
+	}
+	if !strings.Contains(result, "- https://github.com/org/repo/issues/2: new issue — still being shaped") {
+		t.Errorf("Expected second bullet, got %q", result)
+	}
+}
+
+func TestRenderNoteBullet_DiffKinds(t *testing.T) {
+	tests := []struct {
+		name     string
+		note     Note
+		expected string
+	}{
+		{
+			name: "NoteNewItem",
+			note: Note{
+				Kind:     NoteNewItem,
+				IssueURL: "https://github.com/owner/repo/issues/1",
+			},
+			expected: "https://github.com/owner/repo/issues/1: new item (not in previous report)",
+		},
+		{
+			name: "NoteRemovedItem",
+			note: Note{
+				Kind:           NoteRemovedItem,
+				IssueURL:       "https://github.com/owner/repo/issues/2",
+				ReportedStatus: "On Track",
+			},
+			expected: "https://github.com/owner/repo/issues/2: removed (was On Track in previous report)",
+		},
+		{
+			name: "NoteStatusChanged",
+			note: Note{
+				Kind:            NoteStatusChanged,
+				IssueURL:        "https://github.com/owner/repo/issues/3",
+				ReportedStatus:  "At Risk",
+				SuggestedStatus: "On Track",
+			},
+			expected: "https://github.com/owner/repo/issues/3: status changed from At Risk to On Track",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := renderNoteBullet(tc.note)
+			if result != tc.expected {
+				t.Errorf("Expected %q\nGot %q", tc.expected, result)
+			}
+		})
+	}
+}

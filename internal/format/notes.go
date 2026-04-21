@@ -28,6 +28,15 @@ const (
 	// NoteLabelFallback indicates the status was derived from an issue label
 	// because no comment-based status signal was found.
 	NoteLabelFallback
+	// NoteNewItem indicates an issue that appeared in the current report
+	// but was not present in the previous report.
+	NoteNewItem
+	// NoteRemovedItem indicates an issue that was in the previous report
+	// but is no longer in the current report.
+	NoteRemovedItem
+	// NoteStatusChanged indicates the status of an issue changed from
+	// the previous report to the current one.
+	NoteStatusChanged
 )
 
 // Note represents a note entry about an issue's status reporting
@@ -100,6 +109,15 @@ func renderNoteBullet(note Note) string {
 		return fmt.Sprintf("%s: status derived from issue label",
 			note.IssueURL)
 
+	case NoteNewItem:
+		return fmt.Sprintf("%s: new item (not in previous report)", note.IssueURL)
+
+	case NoteRemovedItem:
+		return fmt.Sprintf("%s: removed (was %s in previous report)", note.IssueURL, note.ReportedStatus)
+
+	case NoteStatusChanged:
+		return fmt.Sprintf("%s: status changed from %s to %s", note.IssueURL, note.ReportedStatus, note.SuggestedStatus)
+
 	default:
 		// Unknown note kind, return empty string
 		return ""
@@ -112,6 +130,23 @@ func pluralizeDays(days int) string {
 		return "1 day"
 	}
 	return fmt.Sprintf("%d days", days)
+}
+
+// RenderNotesCollapsible generates a collapsible notes section wrapped in HTML <details>.
+func RenderNotesCollapsible(notes []Note) string {
+	if len(notes) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("<details>\n<summary>📝 Notes (%d)</summary>\n\n", len(notes)))
+	for _, note := range notes {
+		bullet := renderNoteBullet(note)
+		if bullet != "" {
+			builder.WriteString(fmt.Sprintf("- %s\n", bullet))
+		}
+	}
+	builder.WriteString("\n</details>\n")
+	return builder.String()
 }
 
 // HasNotesOfKind checks if any notes of the specified kind exist

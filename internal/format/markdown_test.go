@@ -726,3 +726,71 @@ func TestSortAndRenderIntegration(t *testing.T) {
 		t.Errorf("Last row should contain 'TBD', got: %s", dataLines[2])
 	}
 }
+
+func TestRenderTable_DiffAnnotations(t *testing.T) {
+	transition := ":yellow_circle:→:green_circle:"
+
+	tests := []struct {
+		name     string
+		row      Row
+		contains string
+	}{
+		{
+			name: "NewItem renders 🆕 prefix",
+			row: Row{
+				StatusEmoji:   ":green_circle:",
+				StatusCaption: "On Track",
+				NewItem:       true,
+				EpicTitle:     "New Feature",
+				EpicURL:       "https://github.com/owner/repo/issues/1",
+				UpdateMD:      "Started",
+			},
+			contains: "🆕 :green_circle: On Track",
+		},
+		{
+			name: "StatusTransition renders arrow",
+			row: Row{
+				StatusEmoji:      ":green_circle:",
+				StatusCaption:    "On Track",
+				StatusTransition: &transition,
+				EpicTitle:        "Changed Feature",
+				EpicURL:          "https://github.com/owner/repo/issues/2",
+				UpdateMD:         "Updated",
+			},
+			contains: ":yellow_circle:→:green_circle: On Track",
+		},
+		{
+			name: "Neither renders normally",
+			row: Row{
+				StatusEmoji:   ":green_circle:",
+				StatusCaption: "On Track",
+				EpicTitle:     "Normal Feature",
+				EpicURL:       "https://github.com/owner/repo/issues/3",
+				UpdateMD:      "Normal",
+			},
+			contains: ":green_circle: On Track",
+		},
+		{
+			name: "NewItem takes precedence over StatusTransition",
+			row: Row{
+				StatusEmoji:      ":green_circle:",
+				StatusCaption:    "On Track",
+				NewItem:          true,
+				StatusTransition: &transition,
+				EpicTitle:        "Both Set",
+				EpicURL:          "https://github.com/owner/repo/issues/4",
+				UpdateMD:         "Both",
+			},
+			contains: "🆕 :green_circle: On Track",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RenderTable([]Row{tc.row})
+			if !strings.Contains(result, tc.contains) {
+				t.Errorf("Expected output to contain %q\nGot:\n%s", tc.contains, result)
+			}
+		})
+	}
+}
