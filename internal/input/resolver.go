@@ -63,7 +63,7 @@ type ResolverConfig struct {
 // ProjectClient is an interface for fetching project items
 // This allows us to avoid circular dependencies and makes testing easier
 type ProjectClient interface {
-	FetchProjectItems(ctx context.Context, config interface{}) ([]IssueRef, error)
+	FetchProjectItems(ctx context.Context, config ResolverConfig) ([]IssueRef, error)
 }
 
 // ResolveIssueRefs determines input mode and returns deduplicated issue refs

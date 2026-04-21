@@ -155,19 +155,3 @@ func matchSingleSelectValue(value string, filterValues []string) bool {
 
 	return false
 }
-
-// DeduplicateIssueRefs removes duplicate issue references while preserving order
-func DeduplicateIssueRefs(refs []input.IssueRef) []input.IssueRef {
-	seen := make(map[string]bool)
-	var unique []input.IssueRef
-
-	for _, ref := range refs {
-		// Use canonical URL as the key for deduplication
-		if !seen[ref.URL] {
-			seen[ref.URL] = true
-			unique = append(unique, ref)
-		}
-	}
-
-	return unique
-}

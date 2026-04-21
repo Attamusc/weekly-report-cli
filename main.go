@@ -1,13 +1,9 @@
 package main
 
 import (
-	"os"
-
 	"github.com/Attamusc/weekly-report-cli/cmd"
 )
 
 func main() {
-	if err := cmd.Execute(); err != nil {
-		os.Exit(1)
-	}
+	cmd.Execute()
 }

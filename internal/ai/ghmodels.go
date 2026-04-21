@@ -3,17 +3,17 @@ package ai
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
-	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Attamusc/weekly-report-cli/internal/input"
+	"github.com/Attamusc/weekly-report-cli/internal/retry"
 )
 
 // GHModelsClient implements Summarizer using GitHub Models API
@@ -159,26 +159,23 @@ func (c *GHModelsClient) getSystemPrompt() string {
 	return defaultSystemPrompt
 }
 
-// loggerContextKey is the context key for the logger
-type loggerContextKey struct{}
-
 // Summarize generates a summary for a single update using GitHub Models API
 func (c *GHModelsClient) Summarize(ctx context.Context, issueTitle, issueURL, updateText string) (string, error) {
 	// Get logger from context if available
-	logger, ok := ctx.Value(loggerContextKey{}).(*slog.Logger)
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
 
 	logger.Debug("AI summarizing single update", "model", c.Model, "issue", issueURL)
 	userPrompt := fmt.Sprintf("Issue: %s (%s)\nUpdate:\n%s", issueTitle, issueURL, updateText)
-	return c.callAPI(ctx, userPrompt)
+	return c.callAPI(ctx, userPrompt, "")
 }
 
 // SummarizeMany generates a summary for multiple updates using GitHub Models API
 func (c *GHModelsClient) SummarizeMany(ctx context.Context, issueTitle, issueURL string, updates []string) (string, error) {
 	// Get logger from context if available
-	logger, ok := ctx.Value(loggerContextKey{}).(*slog.Logger)
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
@@ -190,13 +187,13 @@ func (c *GHModelsClient) SummarizeMany(ctx context.Context, issueTitle, issueURL
 		userPrompt += fmt.Sprintf("\n%d) %s", i+1, update)
 	}
 
-	return c.callAPI(ctx, userPrompt)
+	return c.callAPI(ctx, userPrompt, "")
 }
 
 // callAPI makes the actual HTTP request to GitHub Models API with retry logic
-func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string) (string, error) {
+func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string, systemPromptOverride string) (string, error) {
 	// Get logger from context if available
-	logger, ok := ctx.Value(loggerContextKey{}).(*slog.Logger)
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
 	}
@@ -205,7 +202,13 @@ func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string) (string
 		Model:       c.Model,
 		Temperature: temperature,
 		Messages: []message{
-			{Role: "system", Content: c.getSystemPrompt()},
+			{Role: "system", Content: func() string {
+				if systemPromptOverride != "" {
+					return systemPromptOverride
+				}
+				return c.getSystemPrompt()
+			}()},
+
 			{Role: "user", Content: userPrompt},
 		},
 	}
@@ -216,15 +219,12 @@ func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string) (string
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			// Apply jittered exponential backoff
-			delay := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
-			jitterMax := int64(float64(delay) * 0.1) // 10% jitter
-			jitterBig, _ := rand.Int(rand.Reader, big.NewInt(jitterMax+1))
-			jitter := time.Duration(jitterBig.Int64())
-			logger.Debug("AI API retry backoff", "attempt", attempt, "delay", delay+jitter)
+			backoff := retry.CalculateBackoff(attempt-1, int(baseDelay.Milliseconds()))
+			logger.Debug("AI API retry backoff", "attempt", attempt, "delay", backoff)
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
-			case <-time.After(delay + jitter):
+			case <-time.After(backoff):
 			}
 		}
 
@@ -478,13 +478,8 @@ type batchConfig struct {
 // call the API, and return the raw response string. The caller is responsible
 // for building the user prompt and parsing the response.
 func (c *GHModelsClient) executeBatchCall(ctx context.Context, cfg batchConfig, userPrompt string) (string, error) {
-	// Use custom system prompt for batch mode
-	originalPrompt := c.SystemPrompt
-	c.SystemPrompt = cfg.systemPrompt
-	defer func() { c.SystemPrompt = originalPrompt }()
-
-	// Call API
-	response, err := c.callAPI(ctx, userPrompt)
+	// Call API with the batch-specific system prompt
+	response, err := c.callAPI(ctx, userPrompt, cfg.systemPrompt)
 	if err != nil {
 		return "", fmt.Errorf("%s API call failed: %w", cfg.actionName, err)
 	}
@@ -494,7 +489,7 @@ func (c *GHModelsClient) executeBatchCall(ctx context.Context, cfg batchConfig, 
 
 // getContextLogger retrieves the logger from context, falling back to slog.Default.
 func getContextLogger(ctx context.Context) *slog.Logger {
-	logger, ok := ctx.Value(loggerContextKey{}).(*slog.Logger)
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		return slog.Default()
 	}

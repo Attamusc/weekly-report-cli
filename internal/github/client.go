@@ -3,13 +3,14 @@ package github
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/google/go-github/v66/github"
 	"golang.org/x/oauth2"
+
+	"github.com/Attamusc/weekly-report-cli/internal/retry"
 )
 
 const (
@@ -60,7 +61,7 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			lastErr = err
 			if attempt < maxRetries {
-				backoffDuration := calculateBackoff(attempt)
+				backoffDuration := retry.CalculateBackoff(attempt, baseBackoffMs)
 				time.Sleep(backoffDuration)
 			}
 			continue
@@ -91,7 +92,7 @@ func (rt *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			if resp.StatusCode >= 500 {
 				_ = resp.Body.Close()
 				if attempt < maxRetries {
-					backoffDuration := calculateBackoff(attempt)
+					backoffDuration := retry.CalculateBackoff(attempt, baseBackoffMs)
 					time.Sleep(backoffDuration)
 					continue
 				}
@@ -175,18 +176,4 @@ func isAuthorizationError(resp *http.Response) bool {
 	}
 
 	return false
-}
-
-// calculateBackoff calculates exponential backoff with jitter
-func calculateBackoff(attempt int) time.Duration {
-	// Exponential backoff: base * 2^attempt with jitter
-	backoffMs := baseBackoffMs * int(math.Pow(2, float64(attempt)))
-
-	// Add jitter (±25%)
-	jitterMs := backoffMs / 4
-	jitter := time.Duration(jitterMs) * time.Millisecond
-	backoff := time.Duration(backoffMs) * time.Millisecond
-
-	// Return backoff ± jitter
-	return backoff + jitter - (2 * jitter * time.Duration(time.Now().UnixNano()%2))
 }

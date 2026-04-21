@@ -9,6 +9,9 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// ErrNoRows indicates no report rows were produced.
+var ErrNoRows = errors.New("no rows produced")
+
 // Config holds all configuration for the application
 type Config struct {
 	GitHubToken string
@@ -36,17 +39,36 @@ type Config struct {
 	}
 }
 
+// ConfigInput holds the CLI flags and input parameters for creating a Config.
+type ConfigInput struct {
+	SinceDays          int
+	Concurrency        int
+	NoNotes            bool
+	Verbose            bool
+	Quiet              bool
+	InputPath          string
+	SummaryPrompt      string
+	ProjectURL         string
+	ProjectField       string
+	ProjectFieldValues []string
+	ProjectIncludePRs  bool
+	ProjectMaxItems    int
+	ProjectView        string
+	ProjectViewID      string
+	NoSentiment        bool
+}
+
 // FromEnvAndFlags creates a Config from environment variables and CLI flags
-func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool, quiet bool, inputPath string, summaryPrompt string, projectURL string, projectField string, projectFieldValues []string, projectIncludePRs bool, projectMaxItems int, projectView string, projectViewID string, noSentiment bool) (*Config, error) {
+func FromEnvAndFlags(in ConfigInput) (*Config, error) {
 	// Load environment variables from .env file if it exists
 	_ = godotenv.Load() // Silently ignore if .env file doesn't exist
 	config := &Config{
 		GitHubToken: os.Getenv("GITHUB_TOKEN"),
-		SinceDays:   sinceDays,
-		Concurrency: concurrency,
-		Notes:       !noNotes,          // --no-notes inverts the boolean
-		Verbose:     verbose && !quiet, // verbose is disabled if quiet is set
-		Quiet:       quiet,
+		SinceDays:   in.SinceDays,
+		Concurrency: in.Concurrency,
+		Notes:       !in.NoNotes,             // --no-notes inverts the boolean
+		Verbose:     in.Verbose && !in.Quiet, // verbose is disabled if quiet is set
+		Quiet:       in.Quiet,
 	}
 
 	// Validate required GitHub token
@@ -69,10 +91,10 @@ func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool,
 	config.Models.Enabled = os.Getenv("DISABLE_SUMMARY") == ""
 
 	// Set custom system prompt if provided
-	config.Models.SystemPrompt = summaryPrompt
+	config.Models.SystemPrompt = in.SummaryPrompt
 
 	// Sentiment analysis is on by default when AI is enabled
-	config.Models.Sentiment = config.Models.Enabled && !noSentiment
+	config.Models.Sentiment = config.Models.Enabled && !in.NoSentiment
 
 	// AI API timeout: configurable via AI_TIMEOUT env var (in seconds), default 120s
 	config.Models.Timeout = 120 * time.Second
@@ -87,13 +109,13 @@ func FromEnvAndFlags(sinceDays int, concurrency int, noNotes bool, verbose bool,
 	}
 
 	// Set up project configuration
-	config.Project.URL = projectURL
-	config.Project.FieldName = projectField
-	config.Project.FieldValues = projectFieldValues
-	config.Project.IncludePRs = projectIncludePRs
-	config.Project.MaxItems = projectMaxItems
-	config.Project.ViewName = projectView
-	config.Project.ViewID = projectViewID
+	config.Project.URL = in.ProjectURL
+	config.Project.FieldName = in.ProjectField
+	config.Project.FieldValues = in.ProjectFieldValues
+	config.Project.IncludePRs = in.ProjectIncludePRs
+	config.Project.MaxItems = in.ProjectMaxItems
+	config.Project.ViewName = in.ProjectView
+	config.Project.ViewID = in.ProjectViewID
 
 	return config, nil
 }

@@ -3,18 +3,16 @@ package projects
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
-	"math/big"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/Attamusc/weekly-report-cli/internal/input"
+	"github.com/Attamusc/weekly-report-cli/internal/retry"
 )
 
 const (
@@ -338,7 +336,7 @@ func (c *Client) executeGraphQLWithRetry(ctx context.Context, request graphQLReq
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			// Calculate exponential backoff with jitter
-			backoff := calculateBackoff(attempt - 1)
+			backoff := retry.CalculateBackoff(attempt-1, baseBackoffMs)
 			logger.Debug("Retrying GraphQL request", "attempt", attempt, "backoff", backoff)
 
 			select {
@@ -551,19 +549,6 @@ func isRetryableError(err error) bool {
 	return false
 }
 
-// calculateBackoff calculates exponential backoff with jitter
-func calculateBackoff(attempt int) time.Duration {
-	// Exponential backoff: base * 2^attempt
-	backoffMs := baseBackoffMs * int(math.Pow(2, float64(attempt)))
-
-	// Add jitter (±25%)
-	jitterMs := backoffMs / 4
-	jitterBig, _ := rand.Int(rand.Reader, big.NewInt(int64(jitterMs*2+1)))
-	jitter := int(jitterBig.Int64()) - jitterMs
-
-	return time.Duration(backoffMs+jitter) * time.Millisecond
-}
-
 // enhanceGraphQLError enhances a GraphQL error with helpful context
 func enhanceGraphQLError(err error, ref ProjectRef) error {
 	if httpErr, ok := err.(*httpError); ok {
@@ -601,12 +586,4 @@ func formatGraphQLErrors(errors []graphQLError, ref ProjectRef) error {
 	}
 
 	return fmt.Errorf("GraphQL errors for project '%s':\n  - %s", ref.String(), strings.Join(messages, "\n  - "))
-}
-
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
