@@ -1,6 +1,7 @@
 package format
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -89,7 +90,7 @@ func TestRenderTable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := RenderTable(tt.rows)
+			result := RenderTable(tt.rows, nil)
 			if result != tt.expected {
 				t.Errorf("RenderTable() mismatch\nExpected:\n%s\nGot:\n%s",
 					tt.expected, result)
@@ -118,7 +119,7 @@ func TestNewRow(t *testing.T) {
 		UpdateMD:      "Test update",
 	}
 
-	if row != expected {
+	if !reflect.DeepEqual(row, expected) {
 		t.Errorf("NewRow() = %+v, expected %+v", row, expected)
 	}
 }
@@ -325,7 +326,7 @@ func TestRenderTableWithTitle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := RenderTableWithTitle(tt.title, tt.rows)
+			result := RenderTableWithTitle(tt.title, tt.rows, nil)
 			if result != tt.expected {
 				t.Errorf("RenderTableWithTitle() mismatch\nExpected:\n%s\nGot:\n%s",
 					tt.expected, result)
@@ -367,7 +368,7 @@ func TestTableGoldenFormat(t *testing.T) {
 | :red_circle: Off Track | [Payment Gateway Integration](https://github.com/owner/repo/issues/456) | TBD | Blocked by third-party API changes, need to redesign approach |
 `
 
-	result := RenderTable(rows)
+	result := RenderTable(rows, nil)
 	if result != expected {
 		t.Errorf("Golden table format mismatch\nExpected:\n%s\nGot:\n%s",
 			expected, result)
@@ -695,7 +696,7 @@ func TestSortAndRenderIntegration(t *testing.T) {
 	SortRowsByTargetDate(rows)
 
 	// Render the table
-	result := RenderTable(rows)
+	result := RenderTable(rows, nil)
 
 	// Verify the order in the rendered output
 	lines := strings.Split(strings.TrimSpace(result), "\n")
@@ -787,10 +788,76 @@ func TestRenderTable_DiffAnnotations(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := RenderTable([]Row{tc.row})
+			result := RenderTable([]Row{tc.row}, nil)
 			if !strings.Contains(result, tc.contains) {
 				t.Errorf("Expected output to contain %q\nGot:\n%s", tc.contains, result)
 			}
 		})
 	}
+}
+
+func TestRenderTable_ExtraColumns(t *testing.T) {
+	baseRow := Row{
+		StatusEmoji:   ":green_circle:",
+		StatusCaption: "On Track",
+		EpicTitle:     "My Epic",
+		EpicURL:       "https://github.com/owner/repo/issues/1",
+		UpdateMD:      "Looking good",
+	}
+
+	t.Run("nil extra columns produces 4-column table", func(t *testing.T) {
+		result := RenderTable([]Row{baseRow}, nil)
+		if !strings.Contains(result, "| Status | Initiative/Epic | Target Date | Update |") {
+			t.Errorf("Expected 4-column header, got:\n%s", result)
+		}
+		if strings.Contains(result, "Priority") || strings.Contains(result, "Sprint") {
+			t.Errorf("Expected no extra columns in output, got:\n%s", result)
+		}
+	})
+
+	t.Run("empty extra columns produces 4-column table", func(t *testing.T) {
+		result := RenderTable([]Row{baseRow}, []string{})
+		if !strings.Contains(result, "| Status | Initiative/Epic | Target Date | Update |") {
+			t.Errorf("Expected 4-column header, got:\n%s", result)
+		}
+	})
+
+	t.Run("extra columns appear in header and rows", func(t *testing.T) {
+		row := baseRow
+		row.ExtraColumns = map[string]string{"Priority": "P1", "Sprint": "Sprint 3"}
+		result := RenderTable([]Row{row}, []string{"Priority", "Sprint"})
+		if !strings.Contains(result, "| Status | Initiative/Epic | Priority | Sprint | Target Date | Update |") {
+			t.Errorf("Expected 6-column header, got:\n%s", result)
+		}
+		if !strings.Contains(result, "P1") || !strings.Contains(result, "Sprint 3") {
+			t.Errorf("Expected extra column values in output, got:\n%s", result)
+		}
+	})
+
+	t.Run("missing ExtraColumns map produces empty cells", func(t *testing.T) {
+		// row.ExtraColumns is nil
+		result := RenderTable([]Row{baseRow}, []string{"Priority"})
+		// Should not panic, and Priority column should be empty
+		if !strings.Contains(result, "| Priority |") {
+			t.Errorf("Expected Priority header, got:\n%s", result)
+		}
+	})
+
+	t.Run("missing key in ExtraColumns produces empty cell", func(t *testing.T) {
+		row := baseRow
+		row.ExtraColumns = map[string]string{"Sprint": "Sprint 1"}
+		result := RenderTable([]Row{row}, []string{"Priority", "Sprint"})
+		if !strings.Contains(result, "Sprint 1") {
+			t.Errorf("Expected Sprint 1 in output, got:\n%s", result)
+		}
+	})
+
+	t.Run("pipes in extra column values are escaped", func(t *testing.T) {
+		row := baseRow
+		row.ExtraColumns = map[string]string{"Priority": "High | Critical"}
+		result := RenderTable([]Row{row}, []string{"Priority"})
+		if !strings.Contains(result, `High \| Critical`) {
+			t.Errorf("Expected escaped pipe in output, got:\n%s", result)
+		}
+	})
 }

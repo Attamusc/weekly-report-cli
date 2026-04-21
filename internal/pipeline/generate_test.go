@@ -300,3 +300,35 @@ func TestAssembleGenerateResults_WithNote(t *testing.T) {
 		t.Errorf("expected NoteNoUpdatesInWindow, got %v", notes[0].Kind)
 	}
 }
+
+func TestCreateResultFromData_ThreadsMetadata(t *testing.T) {
+	data := IssueData{
+		IssueURL:        "https://github.com/o/r/issues/10",
+		IssueTitle:      "Test Issue",
+		Status:          derive.OnTrack,
+		FallbackSummary: "some update",
+		Assignees:       []string{"alice", "bob"},
+		Labels:          []string{"bug", "priority"},
+		ExtraColumns:    map[string]string{"Sprint": "Sprint 1", "Status": "In Progress"},
+	}
+
+	result := CreateResultFromData(data, "AI summary")
+
+	if result.Row == nil {
+		t.Fatal("expected non-nil row")
+	}
+	row := result.Row
+
+	if len(row.Assignees) != 2 || row.Assignees[0] != "alice" || row.Assignees[1] != "bob" {
+		t.Errorf("unexpected assignees: %v", row.Assignees)
+	}
+	if len(row.Labels) != 2 || row.Labels[0] != "bug" || row.Labels[1] != "priority" {
+		t.Errorf("unexpected labels: %v", row.Labels)
+	}
+	if row.ExtraColumns["Sprint"] != "Sprint 1" || row.ExtraColumns["Status"] != "In Progress" {
+		t.Errorf("unexpected extra columns: %v", row.ExtraColumns)
+	}
+	if row.UpdateMD != "AI summary" {
+		t.Errorf("unexpected update: %q", row.UpdateMD)
+	}
+}

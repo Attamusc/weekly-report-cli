@@ -12,10 +12,12 @@ import (
 
 // IssueRef represents a GitHub issue reference
 type IssueRef struct {
-	Owner  string
-	Repo   string
-	Number int
-	URL    string
+	Owner       string
+	Repo        string
+	Number      int
+	URL         string
+	Assignees   []string          // Optional: populated from project board
+	FieldValues map[string]string // Optional: populated from project board
 }
 
 // String returns a string representation of the IssueRef

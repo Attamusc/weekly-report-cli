@@ -1,6 +1,7 @@
 package input
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -30,7 +31,7 @@ https://github.com/test/example/issues/999#issuecomment-123456`
 	}
 
 	for i, ref := range refs {
-		if ref != expected[i] {
+		if !reflect.DeepEqual(ref, expected[i]) {
 			t.Errorf("expected ref %d to be %+v, got %+v", i, expected[i], ref)
 		}
 	}
@@ -60,7 +61,7 @@ https://github.com/owner/repo/issues/456`
 	}
 
 	for i, ref := range refs {
-		if ref != expected[i] {
+		if !reflect.DeepEqual(ref, expected[i]) {
 			t.Errorf("expected ref %d to be %+v, got %+v", i, expected[i], ref)
 		}
 	}

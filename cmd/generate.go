@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,9 @@ var (
 	summaryPrompt    string
 
 	previousReportPath string
+
+	groupBy string
+	columns string
 
 	generateProjectFlags *projectFlags
 )
@@ -74,7 +78,18 @@ Examples:
   # Mixed sources
   weekly-report-cli generate \
     --project "org:my-org/5" \
-    --input additional-issues.txt`,
+    --input additional-issues.txt
+
+  # Group output by assignee
+  weekly-report-cli generate \
+    --project "org:my-org/5" \
+    --group-by assignee
+
+  # Group by label glob and show extra columns
+  weekly-report-cli generate \
+    --project "org:my-org/5" \
+    --group-by "label:team-*" \
+    --columns "Priority,Sprint"`,
 	RunE: runGenerate,
 }
 
@@ -92,6 +107,8 @@ func init() {
 	generateCmd.Flags().StringVar(&summaryPrompt, "summary-prompt", "", "Custom prompt for AI summarization (uses default if empty)")
 	generateCmd.Flags().StringVar(&previousReportPath, "previous-report", "", "Path to previous report file for week-over-week diff")
 	generateCmd.Flags().BoolVar(&collapsibleNotes, "collapsible-notes", false, "Wrap notes section in collapsible <details> HTML block")
+	generateCmd.Flags().StringVar(&groupBy, "group-by", "", "Group rows by: assignee, label:<glob>, field:<name>")
+	generateCmd.Flags().StringVar(&columns, "columns", "", "Comma-separated project field names to show as extra columns (e.g., 'Priority,Sprint')")
 
 	generateProjectFlags = addProjectFlags(generateCmd)
 }
@@ -234,12 +251,33 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Parse --columns flag
+	var extraColumns []string
+	if columns != "" {
+		for _, col := range strings.Split(columns, ",") {
+			col = strings.TrimSpace(col)
+			if col != "" {
+				extraColumns = append(extraColumns, col)
+			}
+		}
+	}
+
+	// Parse --group-by flag
+	var groupConfig *format.GroupConfig
+	if groupBy != "" {
+		gc, err := format.ParseGroupBy(groupBy)
+		if err != nil {
+			return err
+		}
+		groupConfig = &gc
+	}
+
 	// Generate output
-	return renderGenerateOutput(rows, notes, cfg, logger)
+	return renderGenerateOutput(rows, notes, cfg, logger, extraColumns, groupConfig)
 }
 
 // renderGenerateOutput sorts, renders, and prints the report output
-func renderGenerateOutput(rows []format.Row, notes []format.Note, cfg *config.Config, logger *slog.Logger) error {
+func renderGenerateOutput(rows []format.Row, notes []format.Note, cfg *config.Config, logger *slog.Logger, extraColumns []string, groupConfig *format.GroupConfig) error {
 	if len(rows) == 0 {
 		if !cfg.Quiet {
 			fmt.Fprintf(os.Stderr, "No report rows generated\n")
@@ -250,8 +288,18 @@ func renderGenerateOutput(rows []format.Row, notes []format.Note, cfg *config.Co
 	format.SortRowsByTargetDate(rows)
 
 	logger.Info("Rendering output...", "rows", len(rows))
-	table := format.RenderTable(rows)
-	fmt.Print(table)
+	if groupConfig != nil {
+		groups := format.GroupRows(rows, *groupConfig)
+		for i, group := range groups {
+			if i > 0 {
+				fmt.Print("\n")
+			}
+			fmt.Print(format.RenderTableWithTitle(group.Title, group.Rows, extraColumns))
+		}
+	} else {
+		table := format.RenderTable(rows, extraColumns)
+		fmt.Print(table)
+	}
 
 	if cfg.Notes && len(notes) > 0 {
 		logger.Debug("Adding notes section", "notes", len(notes))

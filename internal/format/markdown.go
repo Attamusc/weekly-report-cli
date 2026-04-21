@@ -11,14 +11,17 @@ import (
 
 // Row represents a single row in the markdown table
 type Row struct {
-	StatusEmoji      string     // Status emoji (e.g., ":green_circle:")
-	StatusCaption    string     // Status caption (e.g., "On Track")
-	StatusTransition *string    // e.g., ":yellow_circle:→:green_circle:" — rendered instead of emoji when set
-	NewItem          bool       // true if this item wasn't in the previous report
-	EpicTitle        string     // Epic/issue title
-	EpicURL          string     // Epic/issue URL
-	TargetDate       *time.Time // Target date (nil renders as "TBD")
-	UpdateMD         string     // Update summary/content (markdown-ready)
+	StatusEmoji      string            // Status emoji (e.g., ":green_circle:")
+	StatusCaption    string            // Status caption (e.g., "On Track")
+	StatusTransition *string           // e.g., ":yellow_circle:→:green_circle:" — rendered instead of emoji when set
+	NewItem          bool              // true if this item wasn't in the previous report
+	EpicTitle        string            // Epic/issue title
+	EpicURL          string            // Epic/issue URL
+	TargetDate       *time.Time        // Target date (nil renders as "TBD")
+	UpdateMD         string            // Update summary/content (markdown-ready)
+	Assignees        []string          // For grouping by assignee
+	Labels           []string          // For grouping by label
+	ExtraColumns     map[string]string // For custom columns and field grouping
 }
 
 // NewRow creates a Row from components, handling status derivation and date parsing
@@ -33,18 +36,28 @@ func NewRow(status derive.Status, epicTitle, epicURL string, targetDate *time.Ti
 	}
 }
 
-// RenderTable generates a markdown table from a slice of rows
-// Returns a properly formatted markdown table with headers and escaped content
-func RenderTable(rows []Row) string {
+// RenderTable generates a markdown table from a slice of rows.
+// extraColumns are optional column names inserted between "Initiative/Epic" and "Target Date".
+// When nil or empty the output is identical to the original 4-column format.
+// Extra column values are read from row.ExtraColumns[columnName]; missing map or key → empty cell.
+func RenderTable(rows []Row, extraColumns []string) string {
 	if len(rows) == 0 {
 		return ""
 	}
 
 	var builder strings.Builder
 
-	// Write table header
-	builder.WriteString("| Status | Initiative/Epic | Target Date | Update |\n")
-	builder.WriteString("|--------|-----------------|-------------|--------|\n")
+	// Build header
+	header := "| Status | Initiative/Epic |"
+	sep := "|--------|-----------------|"
+	for _, col := range extraColumns {
+		header += fmt.Sprintf(" %s |", col)
+		sep += fmt.Sprintf("%s|", strings.Repeat("-", len(col)+2))
+	}
+	header += " Target Date | Update |"
+	sep += "-------------|--------|"
+	builder.WriteString(header + "\n")
+	builder.WriteString(sep + "\n")
 
 	// Write each row
 	for _, row := range rows {
@@ -69,9 +82,18 @@ func RenderTable(rows []Row) string {
 		// Format update column (collapse newlines and escape pipes)
 		updateCol := escapeMarkdownTableCell(collapseNewlines(row.UpdateMD))
 
-		// Write the row
-		builder.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n",
-			statusCol, epicCol, dateCol, updateCol))
+		// Build extra column cells
+		extraCells := ""
+		for _, col := range extraColumns {
+			val := ""
+			if row.ExtraColumns != nil {
+				val = escapeMarkdownTableCell(row.ExtraColumns[col])
+			}
+			extraCells += fmt.Sprintf(" %s |", val)
+		}
+
+		builder.WriteString(fmt.Sprintf("| %s | %s |%s %s | %s |\n",
+			statusCol, epicCol, extraCells, dateCol, updateCol))
 	}
 
 	return builder.String()
@@ -111,8 +133,8 @@ func collapseNewlines(content string) string {
 }
 
 // RenderTableWithTitle renders a table with an optional title/header
-func RenderTableWithTitle(title string, rows []Row) string {
-	table := RenderTable(rows)
+func RenderTableWithTitle(title string, rows []Row, extraColumns []string) string {
+	table := RenderTable(rows, extraColumns)
 	if table == "" {
 		return ""
 	}

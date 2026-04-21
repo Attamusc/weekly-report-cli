@@ -20,6 +20,8 @@ type IssueData struct {
 	ClosedAt              *time.Time
 	CloseReason           string
 	Labels                []string
+	Assignees             []string          // Issue assignees (usernames)
+	ExtraColumns          map[string]string // Project field values for custom columns
 	Reports               []report.Report
 	UpdateTexts           []string
 	Status                derive.Status

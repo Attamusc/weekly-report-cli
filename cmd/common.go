@@ -142,7 +142,14 @@ func (a *projectClientAdapter) FetchProjectItems(ctx context.Context, resolverCf
 	var issueRefs []input.IssueRef
 	for _, item := range projectItems {
 		if item.IssueRef != nil {
-			issueRefs = append(issueRefs, *item.IssueRef)
+			ref := *item.IssueRef
+			if len(item.FieldValues) > 0 {
+				ref.FieldValues = make(map[string]string, len(item.FieldValues))
+				for k, v := range item.FieldValues {
+					ref.FieldValues[k] = v.String()
+				}
+			}
+			issueRefs = append(issueRefs, ref)
 		}
 	}
 

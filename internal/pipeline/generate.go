@@ -42,14 +42,16 @@ func CollectIssueData(ctx context.Context, fetcher IssueFetcher, ref input.Issue
 	reports := report.SelectReports(comments, since)
 
 	result := IssueData{
-		IssueURL:    ref.URL,
-		IssueTitle:  issueData.Title,
-		IssueState:  issueData.State,
-		CreatedAt:   issueData.CreatedAt,
-		ClosedAt:    issueData.ClosedAt,
-		CloseReason: issueData.CloseReason,
-		Labels:      issueData.Labels,
-		Reports:     reports,
+		IssueURL:     ref.URL,
+		IssueTitle:   issueData.Title,
+		IssueState:   issueData.State,
+		CreatedAt:    issueData.CreatedAt,
+		ClosedAt:     issueData.ClosedAt,
+		CloseReason:  issueData.CloseReason,
+		Labels:       issueData.Labels,
+		Assignees:    issueData.Assignees,
+		ExtraColumns: ref.FieldValues,
+		Reports:      reports,
 	}
 
 	// Case 1: No structured reports found
@@ -252,6 +254,9 @@ func CreateResultFromData(data IssueData, summary string) IssueResult {
 	}
 
 	row := format.NewRow(data.Status, data.IssueTitle, data.IssueURL, data.TargetDate, summary)
+	row.Assignees = data.Assignees
+	row.Labels = data.Labels
+	row.ExtraColumns = data.ExtraColumns
 	return IssueResult{
 		IssueURL: data.IssueURL,
 		Row:      &row,
