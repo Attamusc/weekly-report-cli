@@ -63,8 +63,15 @@ type choice struct {
 const (
 	defaultSystemPrompt = `Refine the content in the engineering status updates to be one
 	paragraph of roughly 3-5 sentences, present tense, third-person, markdown-ready, 
-	no prefatory text. Keep relevant looking links intact in markdown format. 
-	Attempt to not lose context when summarizing.`
+	no prefatory text. Attempt to not lose context when summarizing.
+
+	When the source material contains links (GitHub issue/PR references, URLs, etc.),
+	weave them naturally into the summary as inline markdown links with descriptive
+	anchor text that reflects the content the link relates to. Do NOT group links in
+	parentheses or use raw GitHub shorthand references as the link text.
+
+	Bad:  "...experiments reveal more viable endpoints (github/repo#523, github/repo#524)."
+	Good: "...experiments reveal [more viable endpoints to migrate](url) and [new discovery results](url)."`
 
 	batchSystemPrompt = `You are summarizing multiple engineering status updates in a single batch.
 
@@ -76,7 +83,13 @@ You will receive a JSON object with an array of items, each containing:
 
 For each item, produce:
 1. A summary: 3-5 sentences, present tense, third-person, markdown-ready, no prefatory text.
-   Keep relevant links intact in markdown format. Do not lose context when summarizing.
+   Do not lose context when summarizing.
+   When the source material contains links (GitHub issue/PR references, URLs, etc.),
+   weave them naturally into the summary as inline markdown links with descriptive
+   anchor text that reflects the content the link relates to. Do NOT group links in
+   parentheses or use raw GitHub shorthand references as the link text.
+   Bad:  "...experiments reveal more viable endpoints (github/repo#523, github/repo#524)."
+   Good: "...experiments reveal [more viable endpoints to migrate](url) and [new discovery results](url)."
 2. A sentiment assessment: analyze whether the update content matches the reported status.
    - If the content describes blockers, delays, risks, or problems but the status is "On Track",
      suggest a more appropriate status.

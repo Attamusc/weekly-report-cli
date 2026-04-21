@@ -363,8 +363,15 @@ func TestGHModelsClient_DefaultSystemPrompt(t *testing.T) {
 
 		expectedDefaultPrompt := `Refine the content in the engineering status updates to be one
 	paragraph of roughly 3-5 sentences, present tense, third-person, markdown-ready, 
-	no prefatory text. Keep relevant looking links intact in markdown format. 
-	Attempt to not lose context when summarizing.`
+	no prefatory text. Attempt to not lose context when summarizing.
+
+	When the source material contains links (GitHub issue/PR references, URLs, etc.),
+	weave them naturally into the summary as inline markdown links with descriptive
+	anchor text that reflects the content the link relates to. Do NOT group links in
+	parentheses or use raw GitHub shorthand references as the link text.
+
+	Bad:  "...experiments reveal more viable endpoints (github/repo#523, github/repo#524)."
+	Good: "...experiments reveal [more viable endpoints to migrate](url) and [new discovery results](url)."`
 
 		if request.Messages[0].Content != expectedDefaultPrompt {
 			t.Errorf("Expected default system prompt, got '%s'", request.Messages[0].Content)
