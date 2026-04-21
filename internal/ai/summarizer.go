@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -33,6 +35,15 @@ type DescribeBatchItem struct {
 	IssueBody  string // Issue body/description text
 }
 
+// HeaderItem represents a single row's data for executive summary header generation.
+type HeaderItem struct {
+	StatusCaption    string  // e.g., "On Track", "At Risk", "Done"
+	StatusTransition *string // e.g., "At Risk→On Track" or nil if unchanged
+	NewItem          bool    // true if not in previous report
+	Title            string  // Initiative/epic title
+	Summary          string  // The update summary text
+}
+
 // Summarizer provides AI-powered summarization of status report updates
 type Summarizer interface {
 	// Summarize generates a summary for a single update
@@ -48,6 +59,9 @@ type Summarizer interface {
 	// DescribeBatch generates project/goal summaries for issue descriptions
 	// Returns a map of issueURL -> description summary
 	DescribeBatch(ctx context.Context, items []DescribeBatchItem) (map[string]string, error)
+
+	// GenerateHeader produces an executive summary paragraph from assembled report data.
+	GenerateHeader(ctx context.Context, items []HeaderItem) (string, error)
 }
 
 // NoopSummarizer provides a fallback implementation that returns raw text without AI processing
@@ -77,6 +91,37 @@ func (n *NoopSummarizer) SummarizeBatch(_ context.Context, items []BatchItem) (m
 			summary = strings.TrimSpace(strings.Join(item.UpdateTexts, " "))
 		}
 		result[item.IssueURL] = BatchResult{Summary: summary, Sentiment: nil}
+	}
+	return result, nil
+}
+
+// GenerateHeader returns a simple stats string when AI is disabled.
+func (n *NoopSummarizer) GenerateHeader(_ context.Context, items []HeaderItem) (string, error) {
+	if len(items) == 0 {
+		return "", nil
+	}
+	counts := make(map[string]int)
+	var newCount, transitionCount int
+	for _, item := range items {
+		counts[item.StatusCaption]++
+		if item.NewItem {
+			newCount++
+		}
+		if item.StatusTransition != nil {
+			transitionCount++
+		}
+	}
+	var parts []string
+	for status, count := range counts {
+		parts = append(parts, fmt.Sprintf("%d %s", count, strings.ToLower(status)))
+	}
+	sort.Strings(parts)
+	result := fmt.Sprintf("%d items: %s.", len(items), strings.Join(parts, ", "))
+	if newCount > 0 {
+		result += fmt.Sprintf(" %d new items.", newCount)
+	}
+	if transitionCount > 0 {
+		result += fmt.Sprintf(" %d status changes.", transitionCount)
 	}
 	return result, nil
 }

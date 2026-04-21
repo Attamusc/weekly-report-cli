@@ -84,6 +84,36 @@ inputs:
     required: false
     default: 'false'
 
+  previous-report:
+    description: 'Path to previous report file for week-over-week diff'
+    required: false
+
+  collapsible-notes:
+    description: 'Wrap notes section in collapsible HTML block'
+    required: false
+    default: 'false'
+
+  group-by:
+    description: 'Group rows by: assignee, label:<glob>, field:<name>'
+    required: false
+
+  columns:
+    description: 'Comma-separated project field names to show as extra columns'
+    required: false
+
+  summary-header:
+    description: 'Generate an executive summary header above the report table'
+    required: false
+    default: 'false'
+
+  discussion-number:
+    description: 'GitHub Discussion number to post the report to (as a new comment)'
+    required: false
+
+  discussion-repo:
+    description: 'Repository for the discussion (default: current repo, format: owner/repo)'
+    required: false
+
 outputs:
   report:
     description: 'The generated markdown report'
@@ -92,6 +122,14 @@ outputs:
   report-file:
     description: 'Path to the report file'
     value: ${{ steps.generate.outputs.report-file }}
+
+  row-count:
+    description: 'Number of rows in the generated report'
+    value: ${{ steps.generate.outputs.row-count }}
+
+  exit-code:
+    description: 'Exit code from the CLI (0=success, 2=no rows)'
+    value: ${{ steps.generate.outputs.exit-code }}
 
 runs:
   using: 'composite'
@@ -166,13 +204,34 @@ runs:
           ARGS="$ARGS --quiet"
         fi
 
+        if [ -n "${{ inputs.previous-report }}" ]; then
+          ARGS="$ARGS --previous-report '${{ inputs.previous-report }}'"
+        fi
+
+        if [ "${{ inputs.collapsible-notes }}" = "true" ]; then
+          ARGS="$ARGS --collapsible-notes"
+        fi
+
+        if [ -n "${{ inputs.group-by }}" ]; then
+          ARGS="$ARGS --group-by '${{ inputs.group-by }}'"
+        fi
+
+        if [ -n "${{ inputs.columns }}" ]; then
+          ARGS="$ARGS --columns '${{ inputs.columns }}'"
+        fi
+
+        if [ "${{ inputs.summary-header }}" = "true" ]; then
+          ARGS="$ARGS --summary-header"
+        fi
+
         # Run and capture output
         REPORT_FILE="${RUNNER_TEMP}/weekly-report.md"
 
         echo "::group::Running weekly-report-cli"
         echo "Command: weekly-report-cli $ARGS"
 
-        if eval "weekly-report-cli $ARGS" > "$REPORT_FILE" 2>&1; then
+        EXIT_CODE=0
+        if eval "weekly-report-cli $ARGS" > "$REPORT_FILE"; then
           echo "Report generated successfully"
         else
           EXIT_CODE=$?
@@ -183,13 +242,18 @@ runs:
             echo "No issues with updates found in the specified time window." >> "$REPORT_FILE"
           else
             echo "::error::Report generation failed with exit code $EXIT_CODE"
-            cat "$REPORT_FILE"
             exit $EXIT_CODE
           fi
         fi
         echo "::endgroup::"
 
+        # Count report rows (non-empty, non-header table lines)
+        ROW_COUNT=$(grep -c '^|' "$REPORT_FILE" 2>/dev/null | awk '{print $1-2}' || echo 0)
+        [ "$ROW_COUNT" -lt 0 ] && ROW_COUNT=0
+
         # Set outputs
+        echo "exit-code=$EXIT_CODE" >> $GITHUB_OUTPUT
+        echo "row-count=$ROW_COUNT" >> $GITHUB_OUTPUT
         echo "report-file=$REPORT_FILE" >> $GITHUB_OUTPUT
 
         # Handle multiline output for report
@@ -198,3 +262,49 @@ runs:
           cat "$REPORT_FILE"
           echo 'EOF'
         } >> $GITHUB_OUTPUT
+
+    - name: Post to GitHub Discussion
+      if: ${{ inputs.discussion-number != '' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        DISCUSSION_NUMBER: ${{ inputs.discussion-number }}
+        DISCUSSION_REPO: ${{ inputs.discussion-repo || github.repository }}
+        REPORT_FILE: ${{ steps.generate.outputs.report-file }}
+      run: |
+        echo "::group::Posting report to Discussion #${DISCUSSION_NUMBER}"
+
+        REPORT_BODY=$(cat "$REPORT_FILE")
+
+        # Get discussion node ID via GraphQL
+        DISCUSSION_ID=$(gh api graphql -f query='
+          query($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+              discussion(number: $number) { id }
+            }
+          }' \
+          -f owner="${DISCUSSION_REPO%/*}" \
+          -f repo="${DISCUSSION_REPO#*/}" \
+          -F number="$DISCUSSION_NUMBER" \
+          --jq '.data.repository.discussion.id')
+
+        if [ -z "$DISCUSSION_ID" ]; then
+          echo "::error::Could not find Discussion #${DISCUSSION_NUMBER} in ${DISCUSSION_REPO}"
+          exit 1
+        fi
+
+        # Post comment via GraphQL
+        QUERY='mutation($discussionId: ID!, $body: String!) {
+          addDiscussionComment(input: {discussionId: $discussionId, body: $body}) {
+            comment { url }
+          }
+        }'
+
+        COMMENT_URL=$(gh api graphql \
+          -f query="$QUERY" \
+          -f discussionId="$DISCUSSION_ID" \
+          -f body="$REPORT_BODY" \
+          --jq '.data.addDiscussionComment.comment.url')
+
+        echo "Report posted: $COMMENT_URL"
+        echo "::endgroup::"

@@ -144,6 +144,19 @@ Example response format:
   "https://github.com/org/repo/issues/2": "The initiative aims to refactor the payment processing module..."
 }`
 
+	headerSystemPrompt = `You are summarizing a weekly engineering status report. You will receive a JSON array of items, each with:
+- status: current status (e.g., "On Track", "At Risk", "Done")
+- transition: status change from previous week (e.g., "At Risk→On Track") or null
+- new: whether this is a new item this week
+- title: the initiative/epic name
+- summary: the update text
+
+Produce a single paragraph (2-3 sentences) highlighting the most notable changes this week.
+Focus on: status transitions, new blockers, completed items, and overall trajectory.
+Do NOT list every item. Be concise and executive-level.
+
+Respond with ONLY the paragraph text, no formatting, no prefatory text.`
+
 	temperature    = 1 // gpt-5o-mini only supports temperature of 1
 	maxRetries     = 3
 	baseDelay      = 1 * time.Second
