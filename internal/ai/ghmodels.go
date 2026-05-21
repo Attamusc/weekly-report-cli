@@ -157,6 +157,26 @@ Do NOT list every item. Be concise and executive-level.
 
 Respond with ONLY the paragraph text, no formatting, no prefatory text.`
 
+	highlightsSystemPrompt = `You are curating weekly engineering highlights — smaller notable work that
+doesn't appear on the main project board but is worth recognizing.
+
+You will receive a JSON array of items (issues and pull requests) with titles, labels, state,
+whether it's a PR, and recent comments.
+
+Your job:
+1. SELECT only the items worth highlighting — bug fixes shipped, support issues resolved,
+   meaningful infrastructure improvements, important discussions, developer experience wins.
+   Skip trivial/routine items, dependabot bumps, and minor chores.
+2. ASSIGN a theme to each selected item from this list: "Bug Fixes", "Support & Reliability",
+   "Infrastructure", "Developer Experience", "Documentation", "Security", "Performance",
+   or create a short custom theme if none fit.
+3. WRITE a 1-sentence highlight for each selected item — concise, specific, present tense.
+
+Respond with ONLY a valid JSON array:
+[{"id": "issue_url", "theme": "Bug Fixes", "summary": "Fixes intermittent auth timeout affecting 5%% of login attempts."}]
+
+If nothing is worth highlighting, return an empty array [].`
+
 	temperature    = 1 // gpt-5o-mini only supports temperature of 1
 	maxRetries     = 3
 	baseDelay      = 1 * time.Second
@@ -730,4 +750,140 @@ func (c *GHModelsClient) GenerateHeader(ctx context.Context, items []HeaderItem)
 		return "", fmt.Errorf("failed to marshal header items: %w", err)
 	}
 	return c.callAPI(ctx, string(jsonBytes), headerSystemPrompt)
+}
+
+// highlightRequestItem represents a single item in a highlights batch request.
+type highlightRequestItem struct {
+	ID      string   `json:"id"`
+	Title   string   `json:"title"`
+	State   string   `json:"state"`
+	IsPR    bool     `json:"is_pr"`
+	Labels  []string `json:"labels"`
+	Updates []string `json:"updates"`
+}
+
+// highlightResponseItem represents a single item in the AI highlights response.
+type highlightResponseItem struct {
+	ID      string `json:"id"`
+	Theme   string `json:"theme"`
+	Summary string `json:"summary"`
+}
+
+// HighlightsBatch curates notable items from a batch, assigns themes, and writes highlight summaries.
+func (c *GHModelsClient) HighlightsBatch(ctx context.Context, items []HighlightItem) ([]Highlight, error) {
+	logger := getContextLogger(ctx)
+
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	// Chunk if needed
+	if len(items) > maxBatchSize {
+		logger.Debug("Splitting highlights batch into chunks", "totalItems", len(items), "chunkSize", maxBatchSize)
+		return c.chunkedHighlightsBatch(ctx, items, logger)
+	}
+
+	logger.Debug("AI highlights batch", "model", c.Model, "items", len(items))
+
+	prompt, err := c.buildHighlightsPrompt(items)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build highlights prompt: %w", err)
+	}
+
+	response, err := c.callAPI(ctx, prompt, highlightsSystemPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("highlights API call failed: %w", err)
+	}
+
+	highlights, err := c.parseHighlightsResponse(response, items)
+	if err != nil {
+		logger.Debug("Failed to parse highlights response", "error", err)
+		return nil, err
+	}
+
+	logger.Debug("Highlights batch succeeded", "results", len(highlights))
+	return highlights, nil
+}
+
+// chunkedHighlightsBatch processes highlights in chunks and merges results.
+func (c *GHModelsClient) chunkedHighlightsBatch(ctx context.Context, items []HighlightItem, logger *slog.Logger) ([]Highlight, error) {
+	var allHighlights []Highlight
+
+	for i := 0; i < len(items); i += maxBatchSize {
+		end := i + maxBatchSize
+		if end > len(items) {
+			end = len(items)
+		}
+
+		chunk := items[i:end]
+		chunkNum := i/maxBatchSize + 1
+		logger.Debug("Processing highlights chunk", "chunk", chunkNum, "items", len(chunk))
+
+		chunkResults, err := c.HighlightsBatch(ctx, chunk)
+		if err != nil {
+			return nil, fmt.Errorf("highlights chunk %d failed: %w", chunkNum, err)
+		}
+		allHighlights = append(allHighlights, chunkResults...)
+	}
+
+	return allHighlights, nil
+}
+
+// buildHighlightsPrompt creates a JSON prompt for highlights curation.
+func (c *GHModelsClient) buildHighlightsPrompt(items []HighlightItem) (string, error) {
+	reqItems := make([]highlightRequestItem, len(items))
+	for i, item := range items {
+		reqItems[i] = highlightRequestItem{
+			ID:      item.IssueURL,
+			Title:   item.IssueTitle,
+			State:   item.IssueState,
+			IsPR:    item.IsPR,
+			Labels:  item.Labels,
+			Updates: item.UpdateTexts,
+		}
+	}
+
+	jsonBytes, err := json.Marshal(reqItems)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal highlights request: %w", err)
+	}
+
+	return string(jsonBytes), nil
+}
+
+// parseHighlightsResponse parses the AI response into Highlight structs.
+func (c *GHModelsClient) parseHighlightsResponse(response string, items []HighlightItem) ([]Highlight, error) {
+	// Strip markdown code fences if present
+	response = strings.TrimSpace(response)
+	response = strings.TrimPrefix(response, "```json")
+	response = strings.TrimPrefix(response, "```")
+	response = strings.TrimSuffix(response, "```")
+	response = strings.TrimSpace(response)
+
+	var respItems []highlightResponseItem
+	if err := json.Unmarshal([]byte(response), &respItems); err != nil {
+		return nil, fmt.Errorf("failed to parse highlights response: %w", err)
+	}
+
+	// Build lookup for titles from input items
+	titleByURL := make(map[string]string, len(items))
+	for _, item := range items {
+		titleByURL[item.IssueURL] = item.IssueTitle
+	}
+
+	var highlights []Highlight
+	for _, ri := range respItems {
+		title := titleByURL[ri.ID]
+		if title == "" {
+			title = ri.ID // fallback to URL
+		}
+		highlights = append(highlights, Highlight{
+			Theme:   ri.Theme,
+			Title:   title,
+			URL:     ri.ID,
+			Summary: ri.Summary,
+		})
+	}
+
+	return highlights, nil
 }

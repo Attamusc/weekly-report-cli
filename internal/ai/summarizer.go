@@ -44,6 +44,24 @@ type HeaderItem struct {
 	Summary          string  // The update summary text
 }
 
+// Highlight represents a single curated highlight from AI processing.
+type Highlight struct {
+	Theme   string // Category: "Bug Fixes", "Support & Reliability", "Infrastructure", etc.
+	Title   string // Issue/PR title
+	URL     string // Issue/PR URL
+	Summary string // AI-written 1-line highlight
+}
+
+// HighlightItem represents input data for a single item to be considered for highlights.
+type HighlightItem struct {
+	IssueURL    string
+	IssueTitle  string
+	IssueState  string // "open", "closed"
+	IsPR        bool   // true if pull request
+	Labels      []string
+	UpdateTexts []string // Comments/body text for context
+}
+
 // Summarizer provides AI-powered summarization of status report updates
 type Summarizer interface {
 	// Summarize generates a summary for a single update
@@ -62,6 +80,10 @@ type Summarizer interface {
 
 	// GenerateHeader produces an executive summary paragraph from assembled report data.
 	GenerateHeader(ctx context.Context, items []HeaderItem) (string, error)
+
+	// HighlightsBatch curates notable items from a batch, assigns themes, and writes highlight summaries.
+	// Returns only the items worth highlighting (AI filters noise).
+	HighlightsBatch(ctx context.Context, items []HighlightItem) ([]Highlight, error)
 }
 
 // NoopSummarizer provides a fallback implementation that returns raw text without AI processing
@@ -124,6 +146,34 @@ func (n *NoopSummarizer) GenerateHeader(_ context.Context, items []HeaderItem) (
 		result += fmt.Sprintf(" %d status changes.", transitionCount)
 	}
 	return result, nil
+}
+
+// HighlightsBatch returns all items with label-based themes when AI is disabled.
+func (n *NoopSummarizer) HighlightsBatch(_ context.Context, items []HighlightItem) ([]Highlight, error) {
+	var highlights []Highlight
+	for _, item := range items {
+		theme := "General"
+		if len(item.Labels) > 0 {
+			theme = item.Labels[0]
+		}
+		summary := item.IssueTitle
+		if len(item.UpdateTexts) > 0 {
+			text := strings.TrimSpace(item.UpdateTexts[0])
+			if len(text) > 200 {
+				text = text[:200] + "..."
+			}
+			if text != "" {
+				summary = text
+			}
+		}
+		highlights = append(highlights, Highlight{
+			Theme:   theme,
+			Title:   item.IssueTitle,
+			URL:     item.IssueURL,
+			Summary: summary,
+		})
+	}
+	return highlights, nil
 }
 
 // DescribeBatch returns raw issue body text for each item (truncated for table display)
