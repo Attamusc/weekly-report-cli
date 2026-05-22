@@ -19,19 +19,19 @@ func CollectHighlightData(ctx context.Context, fetcher IssueFetcher, ref input.I
 		logger = slog.Default()
 	}
 
-	logger.Debug("Fetching issue metadata", "url", ref.URL)
+	logger.Info("Fetching metadata", "issue", ref.String())
 
 	issueData, err := fetcher.FetchIssue(ctx, ref)
 	if err != nil {
 		return HighlightData{}, fmt.Errorf("failed to fetch issue %s: %w", ref.URL, err)
 	}
 
-	logger.Debug("Fetching recent comments", "url", ref.URL)
+	logger.Info("Metadata fetched, fetching comments", "issue", ref.String(), "title", issueData.Title)
 
 	comments, err := fetcher.FetchCommentsSince(ctx, ref, since)
 	if err != nil {
 		// Non-fatal: proceed with metadata only
-		logger.Debug("Failed to fetch comments, proceeding without", "url", ref.URL, "error", err)
+		logger.Warn("Failed to fetch comments, proceeding without", "issue", ref.String(), "error", err)
 	}
 
 	var updateTexts []string
@@ -41,6 +41,8 @@ func CollectHighlightData(ctx context.Context, fetcher IssueFetcher, ref input.I
 			updateTexts = append(updateTexts, body)
 		}
 	}
+
+	logger.Info("Issue complete", "issue", ref.String(), "comments", len(updateTexts))
 
 	return HighlightData{
 		IssueURL:    ref.URL,

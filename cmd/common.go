@@ -200,12 +200,5 @@ func setupLogger(cfg *config.Config) *slog.Logger {
 	// Use stderr for progress so stdout stays clean for output
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: level,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			// Remove time stamps for cleaner progress output
-			if a.Key == slog.TimeKey {
-				return slog.Attr{}
-			}
-			return a
-		},
 	}))
 }
