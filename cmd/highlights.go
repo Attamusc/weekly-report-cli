@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -122,9 +123,9 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	}
 	logger.Info("Items discovered", "count", len(refs))
 
-	// ========== PHASE B: Collection (parallel hydration) ==========
-	logger.Info("Collecting issue data...", "concurrency", cfg.Concurrency)
-	allData := collectIssueDataParallel(ctx, fetcher, refs, cfg, since, logger)
+	// ========== PHASE B: Collection (parallel hydration — lightweight) ==========
+	logger.Info("Collecting issue data...", "concurrency", cfg.Concurrency, "items", len(refs))
+	allData := collectHighlightDataParallel(ctx, fetcher, refs, cfg, since, logger)
 
 	if len(allData) == 0 {
 		if !cfg.Quiet {
@@ -172,9 +173,9 @@ func parseUsers(raw string) []string {
 	return users
 }
 
-// collectIssueDataParallel fetches issue data in parallel using a bounded worker pool.
-func collectIssueDataParallel(ctx context.Context, fetcher pipeline.IssueFetcher, refs []input.IssueRef, cfg *config.Config, since time.Time, logger interface{ Info(string, ...any) }) []pipeline.IssueData {
-	dataResults := make(chan pipeline.IssueDataResult, len(refs))
+// collectHighlightDataParallel fetches lightweight highlight data in parallel.
+func collectHighlightDataParallel(ctx context.Context, fetcher pipeline.IssueFetcher, refs []input.IssueRef, cfg *config.Config, since time.Time, logger *slog.Logger) []pipeline.HighlightData {
+	dataResults := make(chan pipeline.HighlightDataResult, len(refs))
 	semaphore := make(chan struct{}, cfg.Concurrency)
 
 	var completed atomic.Int32
@@ -187,16 +188,17 @@ func collectIssueDataParallel(ctx context.Context, fetcher pipeline.IssueFetcher
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
-			data, err := pipeline.CollectIssueData(ctx, fetcher, ref, since, cfg.SinceDays)
+			data, err := pipeline.CollectHighlightData(ctx, fetcher, ref, since)
 
 			current := completed.Add(1)
 			if !cfg.Quiet {
-				logger.Info("Collecting issue data",
+				logger.Info("Collected",
 					"completed", int(current),
-					"total", len(refs))
+					"total", len(refs),
+					"url", ref.URL)
 			}
 
-			dataResults <- pipeline.IssueDataResult{Data: data, Err: err}
+			dataResults <- pipeline.HighlightDataResult{Data: data, Err: err}
 		}(ref)
 	}
 
@@ -205,9 +207,10 @@ func collectIssueDataParallel(ctx context.Context, fetcher pipeline.IssueFetcher
 		close(dataResults)
 	}()
 
-	var allData []pipeline.IssueData
+	var allData []pipeline.HighlightData
 	for result := range dataResults {
 		if result.Err != nil {
+			logger.Debug("Error collecting highlight data", "error", result.Err)
 			continue
 		}
 		allData = append(allData, result.Data)
@@ -216,8 +219,8 @@ func collectIssueDataParallel(ctx context.Context, fetcher pipeline.IssueFetcher
 	return allData
 }
 
-// toHighlightItems converts pipeline IssueData to AI HighlightItems.
-func toHighlightItems(data []pipeline.IssueData) []ai.HighlightItem {
+// toHighlightItems converts pipeline HighlightData to AI HighlightItems.
+func toHighlightItems(data []pipeline.HighlightData) []ai.HighlightItem {
 	items := make([]ai.HighlightItem, len(data))
 	for i, d := range data {
 		items[i] = ai.HighlightItem{

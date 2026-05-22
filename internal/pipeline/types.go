@@ -61,3 +61,20 @@ type DescribeIssueDataResult struct {
 	Data DescribeIssueData
 	Err  error
 }
+
+// HighlightData represents lightweight data collected for the highlights command.
+// Unlike IssueData, this skips report extraction, close-reason fetching,
+// and status derivation — just metadata + recent comment text.
+type HighlightData struct {
+	IssueURL    string
+	IssueTitle  string
+	IssueState  string
+	Labels      []string
+	UpdateTexts []string
+}
+
+// HighlightDataResult represents the result of collecting highlight data.
+type HighlightDataResult struct {
+	Data HighlightData
+	Err  error
+}
