@@ -27,11 +27,12 @@ const (
 )
 
 // Search discovers issues and PRs touched by the given users since the cutoff date.
+// When orgs is non-empty, results are scoped to repositories in those organizations.
 // Returns deduplicated, bot-filtered IssueRefs ready for pipeline hydration.
-func Search(ctx context.Context, client *githubapi.Client, users []string, since time.Time) ([]input.IssueRef, error) {
+func Search(ctx context.Context, client *githubapi.Client, users []string, orgs []string, since time.Time) ([]input.IssueRef, error) {
 	logger := getLogger(ctx)
 
-	queries := buildQueries(users, since)
+	queries := buildQueries(users, orgs, since)
 
 	var allIssues []*githubapi.Issue
 	for _, q := range queries {
@@ -56,8 +57,19 @@ func Search(ctx context.Context, client *githubapi.Client, users []string, since
 
 // buildQueries creates search query strings for issues and PRs, batching users
 // into groups of maxUsersPerQuery.
-func buildQueries(users []string, since time.Time) []string {
+func buildQueries(users []string, orgs []string, since time.Time) []string {
 	dateStr := since.Format("2006-01-02")
+
+	// Build org qualifier if specified
+	var orgClause string
+	if len(orgs) > 0 {
+		var parts []string
+		for _, o := range orgs {
+			parts = append(parts, fmt.Sprintf("org:%s", o))
+		}
+		orgClause = strings.Join(parts, " ") + " "
+	}
+
 	var queries []string
 
 	for i := 0; i < len(users); i += maxUsersPerQuery {
@@ -71,11 +83,11 @@ func buildQueries(users []string, since time.Time) []string {
 
 		// Issues: author or commenter
 		queries = append(queries,
-			fmt.Sprintf("%s is:issue updated:>=%s", userClauses, dateStr))
+			fmt.Sprintf("%s%s is:issue updated:>=%s", orgClause, userClauses, dateStr))
 
 		// PRs: author or reviewed-by
 		queries = append(queries,
-			fmt.Sprintf("%s is:pr updated:>=%s", userClauses, dateStr))
+			fmt.Sprintf("%s%s is:pr updated:>=%s", orgClause, userClauses, dateStr))
 	}
 
 	return queries

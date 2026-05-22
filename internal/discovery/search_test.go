@@ -19,6 +19,7 @@ func TestBuildQueries(t *testing.T) {
 	tests := []struct {
 		name     string
 		users    []string
+		orgs     []string
 		wantLen  int
 		wantSubs []string // substrings each query should contain
 	}{
@@ -41,11 +42,31 @@ func TestBuildQueries(t *testing.T) {
 			users:   []string{"a", "b", "c", "d", "e", "f"},
 			wantLen: 4, // 2 queries per batch × 2 batches
 		},
+		{
+			name:    "org filter added to queries",
+			users:   []string{"alice"},
+			orgs:    []string{"my-org"},
+			wantLen: 2,
+			wantSubs: []string{
+				"org:my-org",
+				"involves:alice",
+			},
+		},
+		{
+			name:    "multiple orgs",
+			users:   []string{"alice"},
+			orgs:    []string{"org1", "org2"},
+			wantLen: 2,
+			wantSubs: []string{
+				"org:org1",
+				"org:org2",
+			},
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			queries := buildQueries(tc.users, since)
+			queries := buildQueries(tc.users, tc.orgs, since)
 			if len(queries) != tc.wantLen {
 				t.Errorf("got %d queries, want %d", len(queries), tc.wantLen)
 			}
@@ -168,7 +189,7 @@ func TestSearch_Integration(t *testing.T) {
 	client.BaseURL = serverURL
 
 	since := time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC)
-	refs, err := Search(context.Background(), client, []string{"alice"}, since)
+	refs, err := Search(context.Background(), client, []string{"alice"}, nil, since)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}

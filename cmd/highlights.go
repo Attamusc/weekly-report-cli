@@ -23,6 +23,7 @@ import (
 
 var (
 	highlightsUsers       string
+	highlightsOrgs        string
 	highlightsSinceDays   int
 	highlightsConcurrency int
 	highlightsVerbose     bool
@@ -45,6 +46,9 @@ Examples:
   # Basic usage
   weekly-report-cli highlights --users "user1,user2,user3"
 
+  # Scoped to specific orgs
+  weekly-report-cli highlights --users "user1,user2" --orgs "my-org,other-org"
+
   # Custom time window
   weekly-report-cli highlights --users "user1,user2" --since-days 14
 
@@ -60,6 +64,7 @@ func init() {
 	rootCmd.AddCommand(highlightsCmd)
 
 	highlightsCmd.Flags().StringVar(&highlightsUsers, "users", "", "Comma-separated GitHub usernames (required)")
+	highlightsCmd.Flags().StringVar(&highlightsOrgs, "orgs", "", "Comma-separated GitHub org names to scope results to")
 	highlightsCmd.Flags().IntVar(&highlightsSinceDays, "since-days", 7, "Number of days to look back")
 	highlightsCmd.Flags().IntVar(&highlightsConcurrency, "concurrency", 5, "Max concurrent API requests")
 	highlightsCmd.Flags().BoolVar(&highlightsVerbose, "verbose", false, "Enable verbose logging")
@@ -75,6 +80,9 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	if len(users) == 0 {
 		return fmt.Errorf("no valid users provided")
 	}
+
+	// Parse orgs
+	orgs := parseUsers(highlightsOrgs) // same comma-split logic
 
 	// Build config
 	cfgInput := config.ConfigInput{
@@ -110,8 +118,8 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	since := time.Now().AddDate(0, 0, -cfg.SinceDays)
 
 	// ========== PHASE A: Discovery ==========
-	logger.Info("Discovering activity", "users", len(users), "since", since.Format("2006-01-02"))
-	refs, err := discovery.Search(ctx, ghClient, users, since)
+	logger.Info("Discovering activity", "users", len(users), "orgs", len(orgs), "since", since.Format("2006-01-02"))
+	refs, err := discovery.Search(ctx, ghClient, users, orgs, since)
 	if err != nil {
 		return fmt.Errorf("discovery failed: %w", err)
 	}
