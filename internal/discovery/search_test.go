@@ -29,6 +29,7 @@ func TestBuildQueries(t *testing.T) {
 			wantLen: 2,
 			wantSubs: []string{
 				"involves:alice",
+				"author:alice",
 				"updated:>=2026-05-14",
 			},
 		},

@@ -28,7 +28,7 @@ const (
 
 // Search discovers issues and PRs touched by the given users since the cutoff date.
 // When orgs is non-empty, results are scoped to repositories in those organizations.
-// Returns deduplicated, bot-filtered IssueRefs ready for pipeline hydration.
+// Returns deduplicated, bot-filtered, authorship-filtered IssueRefs ready for pipeline hydration.
 func Search(ctx context.Context, client *githubapi.Client, users []string, orgs []string, since time.Time) ([]input.IssueRef, error) {
 	logger := getLogger(ctx)
 
@@ -48,6 +48,9 @@ func Search(ctx context.Context, client *githubapi.Client, users []string, orgs 
 
 	filtered := filterBots(allIssues)
 	logger.Debug("After bot filtering", "remaining", len(filtered))
+
+	filtered = filterByTeamAuthorship(filtered, users)
+	logger.Debug("After authorship filter", "remaining", len(filtered))
 
 	refs := deduplicateToRefs(filtered)
 	logger.Info("Discovery complete", "total_found", len(allIssues), "after_filter", len(refs))
@@ -79,28 +82,28 @@ func buildQueries(users []string, orgs []string, since time.Time) []string {
 		}
 		chunk := users[i:end]
 
-		userClauses := buildUserClauses(chunk)
+		issueUserClauses := buildUserClauses("involves", chunk)
+		prUserClauses := buildUserClauses("author", chunk)
 
-		// Issues: author or commenter
+		// Issues: any involvement (comments are usually substantive)
 		queries = append(queries,
-			fmt.Sprintf("%s%s is:issue updated:>=%s", orgClause, userClauses, dateStr))
+			fmt.Sprintf("%s%s is:issue updated:>=%s", orgClause, issueUserClauses, dateStr))
 
-		// PRs: author or reviewed-by
+		// PRs: author only — reviewer/approver involvement is low-signal
 		queries = append(queries,
-			fmt.Sprintf("%s%s is:pr updated:>=%s", orgClause, userClauses, dateStr))
+			fmt.Sprintf("%s%s is:pr updated:>=%s", orgClause, prUserClauses, dateStr))
 	}
 
 	return queries
 }
 
-// buildUserClauses creates the OR-joined user qualifier string.
-// For issues this covers author + commenter; for PRs author + reviewed-by.
-// We include both involvement and author qualifiers so the same clause works
-// for both query types (GitHub ignores inapplicable qualifiers).
-func buildUserClauses(users []string) string {
+// buildUserClauses creates the OR-joined user qualifier string using the given qualifier.
+// For issues use "involves" (covers author, commenter, assignee, mention).
+// For PRs use "author" to avoid surfacing items where a user only reviewed.
+func buildUserClauses(qualifier string, users []string) string {
 	var parts []string
 	for _, u := range users {
-		parts = append(parts, fmt.Sprintf("involves:%s", u))
+		parts = append(parts, fmt.Sprintf("%s:%s", qualifier, u))
 	}
 	return strings.Join(parts, " ")
 }
