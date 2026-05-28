@@ -209,3 +209,76 @@ func TestSearch_Integration(t *testing.T) {
 
 func strPtr(s string) *string { return &s }
 func intPtr(i int) *int       { return &i }
+
+func TestSearch_SignalsPopulated(t *testing.T) {
+	closedAt := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
+	updatedAt := time.Date(2026, 5, 21, 8, 0, 0, 0, time.UTC)
+
+	searchResp := &githubapi.IssuesSearchResult{
+		Total: intPtr(1),
+		Issues: []*githubapi.Issue{
+			{
+				HTMLURL:  strPtr("https://github.com/org/repo/pull/42"),
+				Number:   intPtr(42),
+				Title:    strPtr("Fix the thing"),
+				State:    strPtr("closed"),
+				Comments: intPtr(7),
+				User: &githubapi.User{
+					Login: strPtr("alice"),
+					Type:  strPtr("User"),
+				},
+				PullRequestLinks: &githubapi.PullRequestLinks{
+					URL: strPtr("https://api.github.com/repos/org/repo/pulls/42"),
+				},
+				ClosedAt:  &githubapi.Timestamp{Time: closedAt},
+				UpdatedAt: &githubapi.Timestamp{Time: updatedAt},
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/search/issues" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(searchResp)
+	}))
+	defer server.Close()
+
+	serverURL, _ := url.Parse(server.URL + "/")
+	client := githubapi.NewClient(nil)
+	client.BaseURL = serverURL
+
+	since := time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC)
+	refs, err := Search(context.Background(), client, []string{"alice"}, nil, since)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("got %d refs, want 1", len(refs))
+	}
+
+	ref := refs[0]
+	if ref.CommentCount != 7 {
+		t.Errorf("CommentCount: got %d, want 7", ref.CommentCount)
+	}
+	if !ref.IsPR {
+		t.Errorf("IsPR: got false, want true")
+	}
+	if ref.State != "closed" {
+		t.Errorf("State: got %q, want \"closed\"", ref.State)
+	}
+	if ref.AuthorLogin != "alice" {
+		t.Errorf("AuthorLogin: got %q, want \"alice\"", ref.AuthorLogin)
+	}
+	if ref.Title != "Fix the thing" {
+		t.Errorf("Title: got %q, want \"Fix the thing\"", ref.Title)
+	}
+	if ref.ClosedAt == nil || !ref.ClosedAt.Equal(closedAt) {
+		t.Errorf("ClosedAt: got %v, want %v", ref.ClosedAt, closedAt)
+	}
+	if !ref.UpdatedAt.Equal(updatedAt) {
+		t.Errorf("UpdatedAt: got %v, want %v", ref.UpdatedAt, updatedAt)
+	}
+}

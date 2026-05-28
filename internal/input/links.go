@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // IssueRef represents a GitHub issue reference
@@ -18,6 +19,15 @@ type IssueRef struct {
 	URL         string
 	Assignees   []string          // Optional: populated from project board
 	FieldValues map[string]string // Optional: populated from project board
+
+	// Populated from discovery search; zero when input comes from other sources
+	Title        string
+	State        string // "open" | "closed"
+	IsPR         bool
+	AuthorLogin  string
+	CommentCount int
+	UpdatedAt    time.Time
+	ClosedAt     *time.Time
 }
 
 // String returns a string representation of the IssueRef

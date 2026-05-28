@@ -194,12 +194,23 @@ func parseSearchResult(issue *githubapi.Issue) (input.IssueRef, bool) {
 		return input.IssueRef{}, false
 	}
 
-	return input.IssueRef{
-		Owner:  parts[0],
-		Repo:   parts[1],
-		Number: issue.GetNumber(),
-		URL:    htmlURL,
-	}, true
+	ref := input.IssueRef{
+		Owner:        parts[0],
+		Repo:         parts[1],
+		Number:       issue.GetNumber(),
+		URL:          htmlURL,
+		Title:        issue.GetTitle(),
+		State:        issue.GetState(),
+		IsPR:         issue.IsPullRequest(),
+		AuthorLogin:  issue.GetUser().GetLogin(),
+		CommentCount: issue.GetComments(),
+		UpdatedAt:    issue.GetUpdatedAt().Time,
+	}
+	if issue.ClosedAt != nil {
+		t := issue.ClosedAt.Time
+		ref.ClosedAt = &t
+	}
+	return ref, true
 }
 
 // getLogger retrieves the logger from context, falling back to slog.Default.
