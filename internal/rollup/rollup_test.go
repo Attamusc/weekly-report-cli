@@ -15,7 +15,8 @@ var (
 	t2    = time.Date(2026, 5, 28, 0, 0, 0, 0, time.UTC) // after since, newer
 )
 
-func ref(owner, repo string, num int, comments int, isPR bool, closedAt *time.Time, author string, updatedAt time.Time) input.IssueRef {
+func ref(repo string, num int, comments int, isPR bool, author string, updatedAt time.Time) input.IssueRef {
+	owner := "o"
 	url := "https://github.com/" + owner + "/" + repo + "/issues/" + itoa(num)
 	return input.IssueRef{
 		Owner:        owner,
@@ -25,12 +26,10 @@ func ref(owner, repo string, num int, comments int, isPR bool, closedAt *time.Ti
 		IsPR:         isPR,
 		AuthorLogin:  author,
 		CommentCount: comments,
-		ClosedAt:     closedAt,
+		ClosedAt:     nil,
 		UpdatedAt:    updatedAt,
 	}
 }
-
-func ptr(t time.Time) *time.Time { return &t }
 
 func itoa(n int) string {
 	if n == 0 {
@@ -63,8 +62,8 @@ func TestCompute(t *testing.T) {
 		{
 			name: "all-zero scores",
 			refs: []input.IssueRef{
-				ref("o", "r", 1, 0, false, nil, "alice", t0),
-				ref("o", "r", 2, 0, false, nil, "bob", t0),
+				ref("r", 1, 0, false, "alice", t0),
+				ref("r", 2, 0, false, "bob", t0),
 			},
 			wantLen:    2,
 			wantMedian: 0,
@@ -95,10 +94,10 @@ func TestSingletonRepoMitigation(t *testing.T) {
 	// but busy-repo max=1 and there are 3 items so per-repo: 1/1=1.0 also.
 	// Use a case where mitigation clearly helps: busy-repo max=3, lone=2.
 	refs := []input.IssueRef{
-		ref("o", "busy", 1, 3, false, nil, "alice", t0), // raw=3
-		ref("o", "busy", 2, 2, false, nil, "alice", t0), // raw=2
-		ref("o", "busy", 3, 1, false, nil, "alice", t0), // raw=1
-		ref("o", "lone", 1, 0, true, nil, "bob", t0),    // raw=2 (isPR), lone repo (1 item)
+		ref("busy", 1, 3, false, "alice", t0), // raw=3
+		ref("busy", 2, 2, false, "alice", t0), // raw=2
+		ref("busy", 3, 1, false, "alice", t0), // raw=1
+		ref("lone", 1, 0, true, "bob", t0),    // raw=2 (isPR), lone repo (1 item)
 	}
 	r := Compute(refs, since)
 	// busy-repo: count=3 >= threshold, max=3; scores: 1.0, 0.667, 0.333
@@ -123,8 +122,8 @@ func TestTieBreaking(t *testing.T) {
 	// Two items in the same repo with same raw score.
 	// One has later UpdatedAt → should sort first.
 	refs := []input.IssueRef{
-		ref("o", "r", 1, 2, false, nil, "alice", t1), // older
-		ref("o", "r", 2, 2, false, nil, "alice", t2), // newer
+		ref("r", 1, 2, false, "alice", t1), // older
+		ref("r", 2, 2, false, "alice", t2), // newer
 	}
 	r := Compute(refs, since)
 	if len(r.AllSorted) != 2 {
@@ -138,8 +137,8 @@ func TestTieBreaking(t *testing.T) {
 func TestTieBreakingURL(t *testing.T) {
 	// Same repo, same raw, same updatedAt → sort by URL asc.
 	refs := []input.IssueRef{
-		ref("o", "r", 2, 2, false, nil, "alice", t1),
-		ref("o", "r", 1, 2, false, nil, "alice", t1),
+		ref("r", 2, 2, false, "alice", t1),
+		ref("r", 1, 2, false, "alice", t1),
 	}
 	r := Compute(refs, since)
 	if r.AllSorted[0].Ref.URL > r.AllSorted[1].Ref.URL {
@@ -150,10 +149,10 @@ func TestTieBreakingURL(t *testing.T) {
 
 func TestCut(t *testing.T) {
 	refs := []input.IssueRef{
-		ref("o", "r", 1, 5, false, nil, "a", t0), // raw=5, score=1.0
-		ref("o", "r", 2, 3, false, nil, "b", t0), // raw=3, score=0.6
-		ref("o", "r", 3, 1, false, nil, "c", t0), // raw=1, score=0.2
-		ref("o", "r", 4, 4, false, nil, "d", t0), // raw=4, score=0.8
+		ref("r", 1, 5, false, "a", t0), // raw=5, score=1.0
+		ref("r", 2, 3, false, "b", t0), // raw=3, score=0.6
+		ref("r", 3, 1, false, "c", t0), // raw=1, score=0.2
+		ref("r", 4, 4, false, "d", t0), // raw=4, score=0.8
 	}
 	r := Compute(refs, since)
 	// scores: 1.0, 0.8, 0.6, 0.2 → median of 4 = (0.6+0.8)/2 = 0.7
@@ -184,8 +183,8 @@ func TestCut(t *testing.T) {
 
 func TestAllZeroCutEmpty(t *testing.T) {
 	refs := []input.IssueRef{
-		ref("o", "r", 1, 0, false, nil, "a", t0),
-		ref("o", "r", 2, 0, false, nil, "b", t0),
+		ref("r", 1, 0, false, "a", t0),
+		ref("r", 2, 0, false, "b", t0),
 	}
 	r := Compute(refs, since)
 	cut := r.Cut(10)
@@ -201,9 +200,9 @@ func TestAllZeroCutEmpty(t *testing.T) {
 
 func TestMedianOdd(t *testing.T) {
 	refs := []input.IssueRef{
-		ref("o", "r", 1, 5, false, nil, "a", t0), // raw=5, score=1.0
-		ref("o", "r", 2, 2, false, nil, "b", t0), // raw=2, score=0.4
-		ref("o", "r", 3, 3, false, nil, "c", t0), // raw=3, score=0.6
+		ref("r", 1, 5, false, "a", t0), // raw=5, score=1.0
+		ref("r", 2, 2, false, "b", t0), // raw=2, score=0.4
+		ref("r", 3, 3, false, "c", t0), // raw=3, score=0.6
 	}
 	r := Compute(refs, since)
 	// scores sorted: 0.4, 0.6, 1.0 → median = 0.6
@@ -214,7 +213,7 @@ func TestMedianOdd(t *testing.T) {
 
 func TestUnknownAuthor(t *testing.T) {
 	refs := []input.IssueRef{
-		ref("o", "r", 1, 1, false, nil, "", t0), // no author
+		ref("r", 1, 1, false, "", t0), // no author
 	}
 	r := Compute(refs, since)
 	if _, ok := r.ByAuthor["unknown"]; !ok {

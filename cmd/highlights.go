@@ -144,15 +144,19 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	logger.Info("Data collection complete", "items", len(allData))
 
 	// ========== PHASE C: AI Curation ==========
+	// TODO(TODO-8089d691): rewire to SummarizeHighlight+MergeThemes map-reduce pipeline.
+	// The old HighlightsBatch has been deleted. Stub produces noop highlights so the
+	// command compiles; the rewire todo will replace this block entirely.
+	_ = summarizer // used by the rewire todo
 	highlightItems := toHighlightItems(allData)
-
-	logger.Info("Curating highlights...", "items", len(highlightItems))
-	highlights, err := summarizer.HighlightsBatch(ctx, highlightItems)
-	if err != nil {
-		logger.Warn("AI curation failed", "error", err)
-		// Fall back to noop
-		noop := ai.NewNoopSummarizer()
-		highlights, _ = noop.HighlightsBatch(ctx, highlightItems)
+	var highlights []ai.Highlight
+	noop := ai.NewNoopSummarizer()
+	for _, item := range highlightItems {
+		h, err := noop.SummarizeHighlight(ctx, item)
+		if err != nil {
+			continue
+		}
+		highlights = append(highlights, h)
 	}
 
 	// ========== PHASE D: Assembly ==========

@@ -177,11 +177,13 @@ Respond with ONLY a valid JSON array:
 
 If nothing is worth highlighting, return an empty array [].`
 
-	temperature    = 1 // gpt-5o-mini only supports temperature of 1
-	maxRetries     = 3
-	baseDelay      = 1 * time.Second
-	maxBatchSize   = 25   // Maximum items per batch to avoid token limits
-	maxBatchTokens = 8000 // Rough estimate of safe token limit for batch
+	temperature  = 1 // gpt-5o-mini only supports temperature of 1
+	maxRetries   = 3
+	baseDelay    = 1 * time.Second
+	maxBatchSize = 25 // Maximum items per batch (count cap)
+	// maxSingleHighlightChars is the character budget for UpdateTexts in a single
+	// SummarizeHighlight request. One item per call, so token pressure is low.
+	maxSingleHighlightChars = 3000
 )
 
 // getSystemPrompt returns the configured system prompt or the default if empty
@@ -752,7 +754,7 @@ func (c *GHModelsClient) GenerateHeader(ctx context.Context, items []HeaderItem)
 	return c.callAPI(ctx, string(jsonBytes), headerSystemPrompt)
 }
 
-// highlightRequestItem represents a single item in a highlights batch request.
+// highlightRequestItem represents a single item in a SummarizeHighlight request.
 type highlightRequestItem struct {
 	ID      string   `json:"id"`
 	Title   string   `json:"title"`
@@ -762,128 +764,170 @@ type highlightRequestItem struct {
 	Updates []string `json:"updates"`
 }
 
-// highlightResponseItem represents a single item in the AI highlights response.
-type highlightResponseItem struct {
-	ID      string `json:"id"`
+// highlightSingleResponse is the expected response shape for SummarizeHighlight.
+type highlightSingleResponse struct {
 	Theme   string `json:"theme"`
 	Summary string `json:"summary"`
 }
 
-// HighlightsBatch curates notable items from a batch, assigns themes, and writes highlight summaries.
-func (c *GHModelsClient) HighlightsBatch(ctx context.Context, items []HighlightItem) ([]Highlight, error) {
+// highlightMergeItem is one entry in the MergeThemes request payload.
+type highlightMergeItem struct {
+	URL     string `json:"url"`
+	Title   string `json:"title"`
+	Theme   string `json:"theme"`
+	Summary string `json:"summary"`
+}
+
+// highlightMergeResponseItem is one entry in the MergeThemes response.
+type highlightMergeResponseItem struct {
+	URL   string `json:"url"`
+	Theme string `json:"theme"`
+}
+
+const mergeThemesSystemPrompt = `You are merging theme labels across a set of engineering highlights.
+
+You will receive a JSON array where each item has: url, title, theme, summary.
+
+Your job: rename and consolidate themes so they are consistent and minimal.
+Use themes from: "Bug Fixes", "Support & Reliability", "Infrastructure", "Developer Experience",
+"Documentation", "Security", "Performance", or a short custom theme if none fit.
+
+Return ONLY a JSON array of objects with exactly two fields: "url" and "theme".
+Do NOT include title, summary, or any other field.
+Example: [{"url":"https://...","theme":"Bug Fixes"}]`
+
+// truncateHighlightItem returns a copy of item with UpdateTexts trimmed so the
+// total UpdateTexts size fits within maxSingleHighlightChars. The most recent
+// updates are preserved.
+func truncateHighlightItem(item HighlightItem) HighlightItem {
+	out := item
+	out.UpdateTexts = nil
+	totalLen := 0
+	for i := len(item.UpdateTexts) - 1; i >= 0; i-- {
+		u := item.UpdateTexts[i]
+		if totalLen+len(u) > maxSingleHighlightChars {
+			if totalLen < maxSingleHighlightChars {
+				trunc := u[:maxSingleHighlightChars-totalLen]
+				out.UpdateTexts = append([]string{trunc + "…"}, out.UpdateTexts...)
+			}
+			break
+		}
+		out.UpdateTexts = append([]string{u}, out.UpdateTexts...)
+		totalLen += len(u)
+	}
+	return out
+}
+
+// SummarizeHighlight curates a single item and returns a Highlight with theme and summary.
+func (c *GHModelsClient) SummarizeHighlight(ctx context.Context, item HighlightItem) (Highlight, error) {
 	logger := getContextLogger(ctx)
+	logger.Debug("AI summarize highlight", "model", c.Model, "url", item.IssueURL)
 
-	if len(items) == 0 {
-		return nil, nil
+	// Apply per-item safety cap on UpdateTexts.
+	item = truncateHighlightItem(item)
+
+	reqItem := highlightRequestItem{
+		ID:      item.IssueURL,
+		Title:   item.IssueTitle,
+		State:   item.IssueState,
+		IsPR:    item.IsPR,
+		Labels:  item.Labels,
+		Updates: item.UpdateTexts,
 	}
-
-	// Chunk if needed
-	if len(items) > maxBatchSize {
-		logger.Debug("Splitting highlights batch into chunks", "totalItems", len(items), "chunkSize", maxBatchSize)
-		return c.chunkedHighlightsBatch(ctx, items, logger)
-	}
-
-	logger.Debug("AI highlights batch", "model", c.Model, "items", len(items))
-
-	prompt, err := c.buildHighlightsPrompt(items)
+	jsonBytes, err := json.Marshal(reqItem)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build highlights prompt: %w", err)
+		return Highlight{}, fmt.Errorf("failed to marshal highlight item: %w", err)
 	}
 
-	response, err := c.callAPI(ctx, prompt, highlightsSystemPrompt)
+	// Use the system prompt override if provided, otherwise fall back to the
+	// map-step system prompt (highlightsSystemPrompt).
+	sysPrompt := highlightsSystemPrompt
+	if c.SystemPrompt != "" {
+		sysPrompt = c.SystemPrompt
+	}
+
+	response, err := c.callAPI(ctx, string(jsonBytes), sysPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("highlights API call failed: %w", err)
+		return Highlight{}, fmt.Errorf("highlight API call failed: %w", err)
 	}
 
-	highlights, err := c.parseHighlightsResponse(response, items)
-	if err != nil {
-		logger.Debug("Failed to parse highlights response", "error", err)
-		return nil, err
-	}
-
-	logger.Debug("Highlights batch succeeded", "results", len(highlights))
-	return highlights, nil
-}
-
-// chunkedHighlightsBatch processes highlights in chunks and merges results.
-func (c *GHModelsClient) chunkedHighlightsBatch(ctx context.Context, items []HighlightItem, logger *slog.Logger) ([]Highlight, error) {
-	var allHighlights []Highlight
-
-	for i := 0; i < len(items); i += maxBatchSize {
-		end := i + maxBatchSize
-		if end > len(items) {
-			end = len(items)
-		}
-
-		chunk := items[i:end]
-		chunkNum := i/maxBatchSize + 1
-		logger.Debug("Processing highlights chunk", "chunk", chunkNum, "items", len(chunk))
-
-		chunkResults, err := c.HighlightsBatch(ctx, chunk)
-		if err != nil {
-			return nil, fmt.Errorf("highlights chunk %d failed: %w", chunkNum, err)
-		}
-		allHighlights = append(allHighlights, chunkResults...)
-	}
-
-	return allHighlights, nil
-}
-
-// buildHighlightsPrompt creates a JSON prompt for highlights curation.
-func (c *GHModelsClient) buildHighlightsPrompt(items []HighlightItem) (string, error) {
-	reqItems := make([]highlightRequestItem, len(items))
-	for i, item := range items {
-		reqItems[i] = highlightRequestItem{
-			ID:      item.IssueURL,
-			Title:   item.IssueTitle,
-			State:   item.IssueState,
-			IsPR:    item.IsPR,
-			Labels:  item.Labels,
-			Updates: item.UpdateTexts,
-		}
-	}
-
-	jsonBytes, err := json.Marshal(reqItems)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal highlights request: %w", err)
-	}
-
-	return string(jsonBytes), nil
-}
-
-// parseHighlightsResponse parses the AI response into Highlight structs.
-func (c *GHModelsClient) parseHighlightsResponse(response string, items []HighlightItem) ([]Highlight, error) {
-	// Strip markdown code fences if present
+	// Strip markdown code fences.
 	response = strings.TrimSpace(response)
 	response = strings.TrimPrefix(response, "```json")
 	response = strings.TrimPrefix(response, "```")
 	response = strings.TrimSuffix(response, "```")
 	response = strings.TrimSpace(response)
 
-	var respItems []highlightResponseItem
-	if err := json.Unmarshal([]byte(response), &respItems); err != nil {
-		return nil, fmt.Errorf("failed to parse highlights response: %w", err)
+	var resp highlightSingleResponse
+	if err := json.Unmarshal([]byte(response), &resp); err != nil {
+		return Highlight{}, fmt.Errorf("failed to parse highlight response: %w", err)
 	}
 
-	// Build lookup for titles from input items
-	titleByURL := make(map[string]string, len(items))
-	for _, item := range items {
-		titleByURL[item.IssueURL] = item.IssueTitle
+	return Highlight{
+		Theme:   resp.Theme,
+		Title:   item.IssueTitle,
+		URL:     item.IssueURL,
+		Summary: resp.Summary,
+	}, nil
+}
+
+// MergeThemes renames and merges themes across a set of highlights. Only the
+// Theme field is overwritten; Title, URL, and Summary are sourced from the input
+// slice and are never read from the AI response (premortem #5).
+// If the response is malformed or empty, the input is returned unchanged.
+func (c *GHModelsClient) MergeThemes(ctx context.Context, in []Highlight) ([]Highlight, error) {
+	logger := getContextLogger(ctx)
+
+	if len(in) == 0 {
+		return in, nil
 	}
 
-	var highlights []Highlight
-	for _, ri := range respItems {
-		title := titleByURL[ri.ID]
-		if title == "" {
-			title = ri.ID // fallback to URL
+	mergeItems := make([]highlightMergeItem, len(in))
+	for i, h := range in {
+		mergeItems[i] = highlightMergeItem{
+			URL:     h.URL,
+			Title:   h.Title,
+			Theme:   h.Theme,
+			Summary: h.Summary,
 		}
-		highlights = append(highlights, Highlight{
-			Theme:   ri.Theme,
-			Title:   title,
-			URL:     ri.ID,
-			Summary: ri.Summary,
-		})
+	}
+	jsonBytes, err := json.Marshal(mergeItems)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal merge themes request: %w", err)
 	}
 
-	return highlights, nil
+	response, err := c.callAPI(ctx, string(jsonBytes), mergeThemesSystemPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("merge themes API call failed: %w", err)
+	}
+
+	// Strip markdown code fences.
+	response = strings.TrimSpace(response)
+	response = strings.TrimPrefix(response, "```json")
+	response = strings.TrimPrefix(response, "```")
+	response = strings.TrimSuffix(response, "```")
+	response = strings.TrimSpace(response)
+
+	var respItems []highlightMergeResponseItem
+	if err := json.Unmarshal([]byte(response), &respItems); err != nil || len(respItems) == 0 {
+		logger.Warn("MergeThemes response malformed or empty; returning input unchanged",
+			"error", err, "response", response)
+		return in, nil
+	}
+
+	// Build url → new theme map. Only Theme is read from the response.
+	themeByURL := make(map[string]string, len(respItems))
+	for _, ri := range respItems {
+		themeByURL[ri.URL] = ri.Theme
+	}
+
+	// Walk input, overwriting only Theme.
+	out := make([]Highlight, len(in))
+	for i, h := range in {
+		out[i] = h
+		if newTheme, ok := themeByURL[h.URL]; ok && newTheme != "" {
+			out[i].Theme = newTheme
+		}
+	}
+	return out, nil
 }

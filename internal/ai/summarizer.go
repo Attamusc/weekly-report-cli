@@ -81,9 +81,12 @@ type Summarizer interface {
 	// GenerateHeader produces an executive summary paragraph from assembled report data.
 	GenerateHeader(ctx context.Context, items []HeaderItem) (string, error)
 
-	// HighlightsBatch curates notable items from a batch, assigns themes, and writes highlight summaries.
-	// Returns only the items worth highlighting (AI filters noise).
-	HighlightsBatch(ctx context.Context, items []HighlightItem) ([]Highlight, error)
+	// SummarizeHighlight curates a single item and returns a Highlight with theme and summary.
+	SummarizeHighlight(ctx context.Context, item HighlightItem) (Highlight, error)
+
+	// MergeThemes renames and merges themes across a set of highlights, overwriting
+	// only the Theme field. Title, URL, and Summary are never read from the response.
+	MergeThemes(ctx context.Context, in []Highlight) ([]Highlight, error)
 }
 
 // NoopSummarizer provides a fallback implementation that returns raw text without AI processing
@@ -148,32 +151,28 @@ func (n *NoopSummarizer) GenerateHeader(_ context.Context, items []HeaderItem) (
 	return result, nil
 }
 
-// HighlightsBatch returns all items with label-based themes when AI is disabled.
-func (n *NoopSummarizer) HighlightsBatch(_ context.Context, items []HighlightItem) ([]Highlight, error) {
-	var highlights []Highlight
-	for _, item := range items {
-		theme := "General"
-		if len(item.Labels) > 0 {
-			theme = item.Labels[0]
-		}
-		summary := item.IssueTitle
-		if len(item.UpdateTexts) > 0 {
-			text := strings.TrimSpace(item.UpdateTexts[0])
-			if len(text) > 200 {
-				text = text[:200] + "..."
-			}
-			if text != "" {
-				summary = text
-			}
-		}
-		highlights = append(highlights, Highlight{
-			Theme:   theme,
-			Title:   item.IssueTitle,
-			URL:     item.IssueURL,
-			Summary: summary,
-		})
+// labelTheme returns a theme string derived from the first label in the list,
+// falling back to "General" when labels are empty.
+func labelTheme(labels []string) string {
+	if len(labels) > 0 {
+		return labels[0]
 	}
-	return highlights, nil
+	return "General"
+}
+
+// SummarizeHighlight returns a label-themed Highlight when AI is disabled.
+func (n *NoopSummarizer) SummarizeHighlight(_ context.Context, item HighlightItem) (Highlight, error) {
+	return Highlight{
+		Theme:   labelTheme(item.Labels),
+		Title:   item.IssueTitle,
+		URL:     item.IssueURL,
+		Summary: item.IssueTitle,
+	}, nil
+}
+
+// MergeThemes returns the input slice unchanged when AI is disabled.
+func (n *NoopSummarizer) MergeThemes(_ context.Context, in []Highlight) ([]Highlight, error) {
+	return in, nil
 }
 
 // DescribeBatch returns raw issue body text for each item (truncated for table display)

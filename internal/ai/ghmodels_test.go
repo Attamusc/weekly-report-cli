@@ -489,3 +489,189 @@ func TestGHModelsClient_GenerateHeader_Empty(t *testing.T) {
 		t.Errorf("expected empty string, got %q", result)
 	}
 }
+
+func TestGHModelsClient_SummarizeHighlight_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), "Fix login bug") {
+			t.Errorf("request body missing expected title: %s", body)
+		}
+		resp := chatCompletionResponse{
+			Choices: []choice{{Message: message{Role: "assistant", Content: `{"theme":"Bug Fixes","summary":"Fixed the login bug."}`}}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Errorf("failed to encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
+	item := HighlightItem{
+		IssueURL:   "https://github.com/org/repo/issues/1",
+		IssueTitle: "Fix login bug",
+		IssueState: "closed",
+		Labels:     []string{"bug"},
+	}
+	h, err := client.SummarizeHighlight(context.Background(), item)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if h.Theme != "Bug Fixes" {
+		t.Errorf("expected theme %q, got %q", "Bug Fixes", h.Theme)
+	}
+	if h.Summary != "Fixed the login bug." {
+		t.Errorf("expected summary %q, got %q", "Fixed the login bug.", h.Summary)
+	}
+	if h.Title != item.IssueTitle {
+		t.Errorf("expected title %q from input, got %q", item.IssueTitle, h.Title)
+	}
+	if h.URL != item.IssueURL {
+		t.Errorf("expected URL %q from input, got %q", item.IssueURL, h.URL)
+	}
+}
+
+func TestGHModelsClient_SummarizeHighlight_Truncation(t *testing.T) {
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		resp := chatCompletionResponse{
+			Choices: []choice{{Message: message{Role: "assistant", Content: `{"theme":"General","summary":"ok"}`}}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
+	// Build UpdateTexts totalling well over 3000 chars.
+	longText := strings.Repeat("x", 2000)
+	item := HighlightItem{
+		IssueURL:    "https://github.com/org/repo/issues/2",
+		IssueTitle:  "Some issue",
+		UpdateTexts: []string{longText, longText, longText},
+	}
+	_, err := client.SummarizeHighlight(context.Background(), item)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The request body contains the full chat completion JSON. The user content
+	// portion (UpdateTexts) must be bounded to ~maxSingleHighlightChars.
+	// We assert the total body is well under 3*2000 = 6000 chars of raw texts.
+	if len(capturedBody) >= 6000+500 {
+		t.Errorf("expected request body to be truncated; got %d bytes", len(capturedBody))
+	}
+}
+
+func TestGHModelsClient_MergeThemes_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := chatCompletionResponse{
+			Choices: []choice{{Message: message{Role: "assistant", Content: `[{"url":"https://github.com/org/repo/issues/1","theme":"Infrastructure"},{"url":"https://github.com/org/repo/issues/2","theme":"Infrastructure"}]`}}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
+	in := []Highlight{
+		{Theme: "Bug Fixes", Title: "Fix A", URL: "https://github.com/org/repo/issues/1", Summary: "summary A"},
+		{Theme: "Performance", Title: "Perf B", URL: "https://github.com/org/repo/issues/2", Summary: "summary B"},
+	}
+	out, err := client.MergeThemes(context.Background(), in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected 2 highlights, got %d", len(out))
+	}
+	for i, h := range out {
+		if h.Theme != "Infrastructure" {
+			t.Errorf("[%d] expected theme %q, got %q", i, "Infrastructure", h.Theme)
+		}
+		// Title, URL, Summary must come from the input, not the response.
+		if h.Title != in[i].Title {
+			t.Errorf("[%d] title changed: want %q, got %q", i, in[i].Title, h.Title)
+		}
+		if h.URL != in[i].URL {
+			t.Errorf("[%d] URL changed: want %q, got %q", i, in[i].URL, h.URL)
+		}
+		if h.Summary != in[i].Summary {
+			t.Errorf("[%d] summary changed: want %q, got %q", i, in[i].Summary, h.Summary)
+		}
+	}
+}
+
+func TestGHModelsClient_MergeThemes_MalformedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := chatCompletionResponse{
+			Choices: []choice{{Message: message{Role: "assistant", Content: "not json at all"}}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
+	in := []Highlight{
+		{Theme: "Bug Fixes", Title: "Fix A", URL: "https://github.com/org/repo/issues/1", Summary: "summary A"},
+	}
+	out, err := client.MergeThemes(context.Background(), in)
+	if err != nil {
+		t.Fatalf("unexpected error on malformed response: %v", err)
+	}
+	// Must return input unchanged.
+	if len(out) != 1 || out[0].Theme != "Bug Fixes" {
+		t.Errorf("expected input unchanged, got %+v", out)
+	}
+}
+
+func TestNoopSummarizer_SummarizeHighlight(t *testing.T) {
+	noop := NewNoopSummarizer()
+
+	tests := []struct {
+		name          string
+		item          HighlightItem
+		expectedTheme string
+	}{
+		{
+			name: "with labels",
+			item: HighlightItem{
+				IssueURL:   "https://github.com/org/repo/issues/1",
+				IssueTitle: "Fix login bug",
+				Labels:     []string{"bug", "priority"},
+			},
+			expectedTheme: "bug",
+		},
+		{
+			name: "no labels",
+			item: HighlightItem{
+				IssueURL:   "https://github.com/org/repo/issues/2",
+				IssueTitle: "Some task",
+				Labels:     nil,
+			},
+			expectedTheme: "General",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, err := noop.SummarizeHighlight(context.Background(), tc.item)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if h.Theme != tc.expectedTheme {
+				t.Errorf("expected theme %q, got %q", tc.expectedTheme, h.Theme)
+			}
+			if h.Title != tc.item.IssueTitle {
+				t.Errorf("expected title %q, got %q", tc.item.IssueTitle, h.Title)
+			}
+			if h.URL != tc.item.IssueURL {
+				t.Errorf("expected URL %q, got %q", tc.item.IssueURL, h.URL)
+			}
+			if h.Summary != tc.item.IssueTitle {
+				t.Errorf("expected summary %q, got %q", tc.item.IssueTitle, h.Summary)
+			}
+		})
+	}
+}
