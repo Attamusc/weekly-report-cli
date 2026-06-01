@@ -531,6 +531,74 @@ func TestGHModelsClient_SummarizeHighlight_Success(t *testing.T) {
 	}
 }
 
+func TestGHModelsClient_SummarizeHighlight_ArrayResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Model wraps the object in an array — the 5/5 failure mode from A/B run.
+		resp := chatCompletionResponse{
+			Choices: []choice{{Message: message{Role: "assistant", Content: `[{"theme":"Infrastructure","summary":"Refactors CI pipeline to reduce build times."}]`}}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
+	item := HighlightItem{
+		IssueURL:   "https://github.com/org/repo/issues/5",
+		IssueTitle: "Refactor CI",
+		IssueState: "closed",
+	}
+	h, err := client.SummarizeHighlight(context.Background(), item)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if h.Theme != "Infrastructure" {
+		t.Errorf("expected theme %q, got %q", "Infrastructure", h.Theme)
+	}
+	if h.Summary != "Refactors CI pipeline to reduce build times." {
+		t.Errorf("expected summary %q, got %q", "Refactors CI pipeline to reduce build times.", h.Summary)
+	}
+	if h.Title != item.IssueTitle {
+		t.Errorf("expected title %q from input, got %q", item.IssueTitle, h.Title)
+	}
+	if h.URL != item.IssueURL {
+		t.Errorf("expected URL %q from input, got %q", item.IssueURL, h.URL)
+	}
+}
+
+func TestGHModelsClient_SummarizeHighlight_MalformedResponse(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "plain string", content: `"just a string"`},
+		{name: "int array", content: `[1,2,3]`},
+		{name: "multi-element array", content: `[{"theme":"A","summary":"X"},{"theme":"B","summary":"Y"}]`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				resp := chatCompletionResponse{
+					Choices: []choice{{Message: message{Role: "assistant", Content: tc.content}}},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(resp)
+			}))
+			defer srv.Close()
+
+			client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
+			item := HighlightItem{
+				IssueURL:   "https://github.com/org/repo/issues/9",
+				IssueTitle: "Some issue",
+			}
+			_, err := client.SummarizeHighlight(context.Background(), item)
+			if err == nil {
+				t.Error("expected error for malformed response, got nil")
+			}
+		})
+	}
+}
+
 func TestGHModelsClient_SummarizeHighlight_Truncation(t *testing.T) {
 	var capturedBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

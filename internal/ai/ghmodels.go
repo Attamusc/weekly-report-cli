@@ -175,25 +175,24 @@ Do NOT list every item. Be concise and executive-level.
 
 Respond with ONLY the paragraph text, no formatting, no prefatory text.`
 
-	highlightsSystemPrompt = `You are curating weekly engineering highlights — smaller notable work that
-doesn't appear on the main project board but is worth recognizing.
+	singleHighlightSystemPrompt = `You are evaluating a single engineering item to determine if it is worth highlighting.
 
-You will receive a JSON array of items (issues and pull requests) with titles, labels, state,
-whether it's a PR, and recent comments.
+You will receive a JSON object for one issue or pull request with: id, title, state, is_pr, labels, and recent updates.
 
-Your job:
-1. SELECT only the items worth highlighting — bug fixes shipped, support issues resolved,
-   meaningful infrastructure improvements, important discussions, developer experience wins.
-   Skip trivial/routine items, dependabot bumps, and minor chores.
-2. ASSIGN a theme to each selected item from this list: "Bug Fixes", "Support & Reliability",
-   "Infrastructure", "Developer Experience", "Documentation", "Security", "Performance",
-   or create a short custom theme if none fit.
-3. WRITE a 1-sentence highlight for each selected item — concise, specific, present tense.
+Decide if this item is worth highlighting — bug fixes shipped, support issues resolved,
+meaningful infrastructure improvements, important discussions, developer experience wins.
+Skip trivial/routine items, dependabot bumps, and minor chores.
 
-Respond with ONLY a valid JSON array:
-[{"id": "issue_url", "theme": "Bug Fixes", "summary": "Fixes intermittent auth timeout affecting 5%% of login attempts."}]
+If worth highlighting:
+- ASSIGN a theme from: "Bug Fixes", "Support & Reliability", "Infrastructure", "Developer Experience",
+  "Documentation", "Security", "Performance", or a short custom theme if none fit.
+- WRITE a 1-sentence highlight — concise, specific, present tense.
 
-If nothing is worth highlighting, return an empty array [].`
+Return ONE JSON object with exactly two keys: "theme" and "summary".
+Do NOT wrap the object in an array.
+Example: {"theme": "Bug Fixes", "summary": "Fixes intermittent auth timeout affecting login."}
+
+If the item is NOT worth highlighting, return: {"theme": "", "summary": ""}`
 
 	temperature  = 1 // gpt-5o-mini only supports temperature of 1
 	maxRetries   = 3
@@ -839,6 +838,28 @@ func truncateHighlightItem(item HighlightItem) HighlightItem {
 	return out
 }
 
+// parseSingleHighlightResponse parses the raw JSON string from a SummarizeHighlight
+// API response. It accepts both shapes the model may return:
+//   - Preferred: {"theme": "...", "summary": "..."}
+//   - Acceptable: [{"theme": "...", "summary": "..."}] — single-element array, unwrapped.
+//
+// Any other shape is returned as an error so the caller's per-item fallback fires.
+func parseSingleHighlightResponse(raw string) (highlightSingleResponse, error) {
+	// Try object first (preferred shape).
+	var single highlightSingleResponse
+	if err := json.Unmarshal([]byte(raw), &single); err == nil {
+		return single, nil
+	}
+
+	// Try single-element array (model wrapped the object in [])
+	var arr []highlightSingleResponse
+	if err := json.Unmarshal([]byte(raw), &arr); err == nil && len(arr) == 1 {
+		return arr[0], nil
+	}
+
+	return highlightSingleResponse{}, fmt.Errorf("expected JSON object or single-element array, got: %s", raw)
+}
+
 // SummarizeHighlight curates a single item and returns a Highlight with theme and summary.
 func (c *GHModelsClient) SummarizeHighlight(ctx context.Context, item HighlightItem) (Highlight, error) {
 	logger := getContextLogger(ctx)
@@ -860,9 +881,9 @@ func (c *GHModelsClient) SummarizeHighlight(ctx context.Context, item HighlightI
 		return Highlight{}, fmt.Errorf("failed to marshal highlight item: %w", err)
 	}
 
-	// Use the system prompt override if provided, otherwise fall back to the
-	// map-step system prompt (highlightsSystemPrompt).
-	sysPrompt := highlightsSystemPrompt
+	// Use the system prompt override if provided, otherwise use the single-item
+	// system prompt (singleHighlightSystemPrompt) which asks for one JSON object.
+	sysPrompt := singleHighlightSystemPrompt
 	if c.SystemPrompt != "" {
 		sysPrompt = c.SystemPrompt
 	}
@@ -879,8 +900,8 @@ func (c *GHModelsClient) SummarizeHighlight(ctx context.Context, item HighlightI
 	response = strings.TrimSuffix(response, "```")
 	response = strings.TrimSpace(response)
 
-	var resp highlightSingleResponse
-	if err := json.Unmarshal([]byte(response), &resp); err != nil {
+	resp, err := parseSingleHighlightResponse(response)
+	if err != nil {
 		return Highlight{}, fmt.Errorf("failed to parse highlight response: %w", err)
 	}
 
