@@ -574,6 +574,8 @@ func TestGHModelsClient_SummarizeHighlight_MalformedResponse(t *testing.T) {
 		{name: "plain string", content: `"just a string"`},
 		{name: "int array", content: `[1,2,3]`},
 		{name: "multi-element array", content: `[{"theme":"A","summary":"X"},{"theme":"B","summary":"Y"}]`},
+		{name: "empty summary", content: `{"theme":"Infrastructure","summary":""}`},
+		{name: "whitespace-only summary", content: `{"theme":"Infrastructure","summary":"   "}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

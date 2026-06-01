@@ -845,16 +845,23 @@ func truncateHighlightItem(item HighlightItem) HighlightItem {
 //
 // Any other shape is returned as an error so the caller's per-item fallback fires.
 func parseSingleHighlightResponse(raw string) (highlightSingleResponse, error) {
+	validate := func(r highlightSingleResponse) (highlightSingleResponse, error) {
+		if strings.TrimSpace(r.Summary) == "" {
+			return highlightSingleResponse{}, fmt.Errorf("empty summary in highlight response")
+		}
+		return r, nil
+	}
+
 	// Try object first (preferred shape).
 	var single highlightSingleResponse
 	if err := json.Unmarshal([]byte(raw), &single); err == nil {
-		return single, nil
+		return validate(single)
 	}
 
 	// Try single-element array (model wrapped the object in [])
 	var arr []highlightSingleResponse
 	if err := json.Unmarshal([]byte(raw), &arr); err == nil && len(arr) == 1 {
-		return arr[0], nil
+		return validate(arr[0])
 	}
 
 	return highlightSingleResponse{}, fmt.Errorf("expected JSON object or single-element array, got: %s", raw)
