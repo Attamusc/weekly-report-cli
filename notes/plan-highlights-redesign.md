@@ -206,3 +206,16 @@ Most likely failure modes and the mitigations baked into the plan.
 
 - Whether `Highlight.Summary` should fall back to the issue title when AI fails on a single item (`SummarizeHighlight` returns error → use the item as-is with a label-derived theme). Plan says yes — partial results beat all-or-nothing failure. Encoded in todo for map orchestration.
 - Output format of `RenderRollup` tables — markdown table vs. bullet list. Plan says markdown table (more scannable when each author has 10+ items).
+
+## Observed after rollout
+
+Smoke check date: <TBD>
+Command: <TBD>
+
+- Discovered refs: <N>
+- Survivors after cut: <N>
+- Hydration API calls: <N> (should equal survivors, not discovered)
+- AI map calls: <N>
+- AI reduce calls: <N>
+- Wall clock: <Ns>
+- Notes: <observations>

@@ -226,6 +226,94 @@ weekly-report-cli generate \
   --since-days 14
 ```
 
+### `highlights` — Surface Notable Work
+
+The `highlights` command discovers issues and PRs touched by a set of GitHub users,
+ranks them via a deterministic mechanical rollup, and (by default) curates the
+top results with AI. It is designed for weekly team standup reports or async
+shoutouts and is **API-efficient**: comment bodies are only fetched for items
+that survive the scoring cut, not for every discovered item.
+
+#### Pipeline
+
+```
+A. Discover   — GitHub search → []IssueRef (preserves score signals in search metadata)
+B. Rollup     — Score every item: raw = comments + 5×closed_this_week + 2×is_pr;
+                normalize per repo; group by primary author → Rollup
+C. Cut        — survivors = items with score ≥ median, capped at --ai-top (default 50)
+D. Hydrate    — Fetch comment bodies ONLY for survivors (not all discovered items)
+E. AI map     — One SummarizeHighlight call per survivor (parallel, --ai-concurrency)
+F. AI reduce  — One MergeThemes call to rename/merge theme labels across all results
+G. Render     — Group by theme (AI path) or by author (--no-summary path)
+```
+
+When `--no-summary` is passed (or AI is disabled), phases D–F are skipped entirely
+and the tool renders the mechanical rollup grouped by author — zero AI calls, zero
+hydration API calls, zero extra cost.
+
+#### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--users` | *(required)* | Comma-separated GitHub usernames to surface work for |
+| `--orgs` | *(none)* | Scope results to these orgs only |
+| `--since-days` | `7` | Look-back window in days |
+| `--concurrency` | `5` | Max concurrent API requests during hydration (Phase D) |
+| `--ai-concurrency` | `5` | Max concurrent AI map requests (Phase E) |
+| `--ai-top` | `50` | Maximum survivors to send to AI; lower = fewer AI calls |
+| `--no-summary` | `false` | Skip AI; render mechanical rollup grouped by author |
+| `--summary-prompt` | *(none)* | Custom AI system prompt for the map step |
+| `--verbose` | `false` | Log per-call latency and pipeline diagnostics |
+| `--quiet` | `false` | Suppress progress output |
+
+#### API Volume
+
+- **Discovery:** 1 search API call per user (unchanged).
+- **Hydration:** One API call per *survivor* (≤ `--ai-top`, ≤ 50 by default).
+  Items that score below the median are **never hydrated** — the main cost saving
+  over the old approach.
+- **AI (default path):** `len(survivors)` map calls + 1 reduce call. Each map call
+  sees a single item so there is no token-pressure chunking.
+- **AI (--no-summary):** 0 calls.
+
+#### Examples
+
+```bash
+# Default: AI-curated highlights grouped by theme
+weekly-report-cli highlights --users "alice,bob,carol"
+
+# Scope to a specific org
+weekly-report-cli highlights --users "alice,bob" --orgs "my-org"
+
+# Extend look-back to two weeks
+weekly-report-cli highlights --users "alice,bob" --since-days 14
+
+# Mechanical rollup only — no AI calls, no hydration, grouped by author:
+# Each author section is a markdown table: repo/num · title · state · score · labels
+weekly-report-cli highlights --users "alice,bob" --no-summary
+
+# Limit AI to the top 20 items (fewer map calls, lower cost)
+weekly-report-cli highlights --users "alice,bob" --ai-top 20
+
+# Higher AI concurrency for large teams (more parallel map calls)
+weekly-report-cli highlights --users "alice,bob,carol,dave" --ai-concurrency 10
+
+# Verbose: shows per-call latency, survivor count, phase timings
+weekly-report-cli highlights --users "alice,bob" --verbose
+```
+
+#### Output Shape
+
+**Default (AI on):** Markdown sections grouped by theme, each item with a
+one-sentence AI summary. Format is identical to the previous `highlights` output.
+
+**`--no-summary`:** Markdown table per author, columns:
+`Issue · Title · State · Score · Labels`. No AI involvement whatsoever.
+
+> **Note:** The `--no-summary` output format changed in the rollup redesign.
+> Previously it rendered label-bucketed output via the Noop AI path; now it
+> produces a genuine author-grouped rollup table with scores. This is intentional.
+
 ### Input Modes
 
 The tool supports three input modes:
