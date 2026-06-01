@@ -25,7 +25,7 @@ func TestFromEnvAndFlags_DefaultValues(t *testing.T) {
 	if cfg.Models.BaseURL != "https://models.github.ai" {
 		t.Errorf("got BaseURL=%q, want default", cfg.Models.BaseURL)
 	}
-	if cfg.Models.Model != "gpt-5-mini" {
+	if cfg.Models.Model != "gpt-4o-mini" {
 		t.Errorf("got Model=%q, want default", cfg.Models.Model)
 	}
 	if cfg.Models.Timeout.Seconds() != 120 {

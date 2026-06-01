@@ -84,7 +84,7 @@ func FromEnvAndFlags(in ConfigInput) (*Config, error) {
 
 	config.Models.Model = os.Getenv("GITHUB_MODELS_MODEL")
 	if config.Models.Model == "" {
-		config.Models.Model = "gpt-5-mini"
+		config.Models.Model = "gpt-4o-mini"
 	}
 
 	// Check if AI summarization is disabled
