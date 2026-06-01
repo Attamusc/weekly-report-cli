@@ -23,6 +23,21 @@ type GHModelsClient struct {
 	Model        string
 	Token        string
 	SystemPrompt string
+	// chatPath is the URL path suffix for the chat completions endpoint.
+	// Computed from BaseURL at construction time.
+	chatPath string
+	// copilotIntegrationID, when non-empty, is sent as the Copilot-Integration-Id header.
+	copilotIntegrationID string
+}
+
+// endpointProfileFor returns the chat path and Copilot integration ID for the given base URL.
+// When baseURL contains "githubcopilot.com", the Copilot endpoint profile is used;
+// otherwise, the GitHub Models endpoint profile is used.
+func endpointProfileFor(baseURL string) (chatPath, integrationID string) {
+	if strings.Contains(baseURL, "githubcopilot.com") {
+		return "/chat/completions", "vscode-chat"
+	}
+	return "/inference/chat/completions", ""
 }
 
 // NewGHModelsClient creates a new GitHub Models API client
@@ -30,12 +45,15 @@ func NewGHModelsClient(baseURL, model, token, systemPrompt string, timeout time.
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
+	chatPath, integrationID := endpointProfileFor(baseURL)
 	return &GHModelsClient{
-		HTTP:         &http.Client{Timeout: timeout},
-		BaseURL:      baseURL,
-		Model:        model,
-		Token:        token,
-		SystemPrompt: systemPrompt,
+		HTTP:                 &http.Client{Timeout: timeout},
+		BaseURL:              baseURL,
+		Model:                model,
+		Token:                token,
+		SystemPrompt:         systemPrompt,
+		chatPath:             chatPath,
+		copilotIntegrationID: integrationID,
 	}
 }
 
@@ -312,7 +330,7 @@ func (c *GHModelsClient) makeHTTPRequest(ctx context.Context, request chatComple
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := c.BaseURL + "/inference/chat/completions"
+	url := c.BaseURL + c.chatPath
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -321,6 +339,9 @@ func (c *GHModelsClient) makeHTTPRequest(ctx context.Context, request chatComple
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("User-Agent", "weekly-report-cli/1.0")
+	if c.copilotIntegrationID != "" {
+		req.Header.Set("Copilot-Integration-Id", c.copilotIntegrationID)
+	}
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

@@ -169,9 +169,20 @@ uses: Attamusc/weekly-report-cli@v1.2.3
 - `GITHUB_TOKEN` - Personal Access Token for GitHub API access and GitHub Models
 
 #### Optional
-- `GITHUB_MODELS_BASE_URL` - Base URL for GitHub Models API (default: `https://models.github.ai`)
+- `GITHUB_MODELS_BASE_URL` - Base URL for the AI completions endpoint (default: `https://models.github.ai`)
 - `GITHUB_MODELS_MODEL` - AI model to use (default: `gpt-4o-mini`)
 - `DISABLE_SUMMARY` - Set to any value to disable AI summarization
+
+**Supported endpoint configurations:**
+
+| Endpoint | Base URL | Example model |
+|---|---|---|
+| GitHub Models (default) | `https://models.github.ai` | `openai/gpt-4o-mini` |
+| GitHub Copilot API | `https://api.githubcopilot.com` | `claude-haiku-4.5` |
+
+When `GITHUB_MODELS_BASE_URL` is set to `https://api.githubcopilot.com`, the client automatically uses the correct path (`/chat/completions`) and sends the required `Copilot-Integration-Id: vscode-chat` header. This allows access to Anthropic (Haiku, Sonnet) and Google (Gemini) models available through your Copilot seat.
+
+> **Note**: The Copilot completions endpoint is not officially documented for third-party CLI use. It works with a classic PAT on a Copilot-seated account, but may change without notice. GitHub Actions `GITHUB_TOKEN` does **not** work with this endpoint.
 
 ### Setting up GitHub Token
 1. Go to GitHub Settings > Developer settings > Personal access tokens

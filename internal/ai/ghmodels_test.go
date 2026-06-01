@@ -675,3 +675,98 @@ func TestNoopSummarizer_SummarizeHighlight(t *testing.T) {
 		})
 	}
 }
+
+func TestEndpointProfileFor(t *testing.T) {
+	tests := []struct {
+		name            string
+		baseURL         string
+		wantPath        string
+		wantIntegration string
+	}{
+		{
+			name:            "github models endpoint",
+			baseURL:         "https://models.github.ai",
+			wantPath:        "/inference/chat/completions",
+			wantIntegration: "",
+		},
+		{
+			name:            "copilot endpoint",
+			baseURL:         "https://api.githubcopilot.com",
+			wantPath:        "/chat/completions",
+			wantIntegration: "vscode-chat",
+		},
+		{
+			name:            "copilot endpoint with proxy subdomain",
+			baseURL:         "https://proxy.githubcopilot.com",
+			wantPath:        "/chat/completions",
+			wantIntegration: "vscode-chat",
+		},
+		{
+			name:            "unknown endpoint falls back to models path",
+			baseURL:         "https://custom.example.com",
+			wantPath:        "/inference/chat/completions",
+			wantIntegration: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotPath, gotID := endpointProfileFor(tc.baseURL)
+			if gotPath != tc.wantPath {
+				t.Errorf("chatPath: got %q, want %q", gotPath, tc.wantPath)
+			}
+			if gotID != tc.wantIntegration {
+				t.Errorf("integrationID: got %q, want %q", gotID, tc.wantIntegration)
+			}
+		})
+	}
+}
+
+func TestGHModelsClient_CopilotEndpoint(t *testing.T) {
+	var capturedPath string
+	var capturedIntegrationID string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		capturedIntegrationID = r.Header.Get("Copilot-Integration-Id")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"choices": [
+				{
+					"message": {
+						"role": "assistant",
+						"content": "Haiku summary of the update."
+					}
+				}
+			]
+		}`)
+	}))
+	defer server.Close()
+
+	// Build a base URL that contains "githubcopilot.com" so that endpointProfileFor
+	// selects the Copilot profile, while still pointing at the local httptest server.
+	// We embed the magic substring as a path segment, which the server ignores.
+	baseURL := server.URL + "/githubcopilot.com"
+
+	client := NewGHModelsClient(baseURL, "claude-haiku-4.5", "test-token", "", 0)
+
+	result, err := client.Summarize(
+		context.Background(),
+		"My Issue",
+		"https://github.com/org/repo/issues/1",
+		"Some update text.",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result != "Haiku summary of the update." {
+		t.Errorf("unexpected result: %q", result)
+	}
+	if capturedPath != "/githubcopilot.com/chat/completions" {
+		t.Errorf("expected Copilot chat path, got %q", capturedPath)
+	}
+	if capturedIntegrationID != "vscode-chat" {
+		t.Errorf("expected Copilot-Integration-Id header to be %q, got %q", "vscode-chat", capturedIntegrationID)
+	}
+}
