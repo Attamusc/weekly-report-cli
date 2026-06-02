@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Attamusc/weekly-report-cli/internal/input"
+	"github.com/Attamusc/weekly-report-cli/internal/narrative"
 )
 
 // truncate returns s trimmed to at most maxChars characters.
@@ -21,9 +22,9 @@ func truncate(s string, maxChars int) string {
 
 // CollectNarrativeItem fetches rich Tier-2 data for one issue/PR survivor.
 // Sequence: issue metadata → comments → timeline events → PR object (IsPR only).
-// Truncation caps (MaxBodyChars, MaxCommentChars, MaxComments, MaxEvents) are
+// Truncation caps (narrative.MaxBodyChars, narrative.MaxCommentChars, etc.) are
 // applied at collection time to bound token budget for the narrative AI call.
-func CollectNarrativeItem(ctx context.Context, fetcher IssueFetcher, ref input.IssueRef, since time.Time) (NarrativeItem, error) {
+func CollectNarrativeItem(ctx context.Context, fetcher IssueFetcher, ref input.IssueRef, since time.Time) (narrative.Item, error) {
 	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
 	if !ok {
 		logger = slog.Default()
@@ -33,7 +34,7 @@ func CollectNarrativeItem(ctx context.Context, fetcher IssueFetcher, ref input.I
 
 	issueData, err := fetcher.FetchIssue(ctx, ref)
 	if err != nil {
-		return NarrativeItem{}, fmt.Errorf("failed to fetch issue %s: %w", ref.URL, err)
+		return narrative.Item{}, fmt.Errorf("failed to fetch issue %s: %w", ref.URL, err)
 	}
 
 	logger.Info("Metadata fetched, fetching comments", "issue", ref.String(), "title", issueData.Title)
@@ -51,40 +52,40 @@ func CollectNarrativeItem(ctx context.Context, fetcher IssueFetcher, ref input.I
 	}
 
 	// Build attributed comments (chronological, capped at MaxComments most recent).
-	var comments []NarrativeComment
+	var comments []narrative.Comment
 	for _, c := range rawComments {
-		body := truncate(c.Body, MaxCommentChars)
+		body := truncate(c.Body, narrative.MaxCommentChars)
 		if body == "" {
 			continue
 		}
-		comments = append(comments, NarrativeComment{
+		comments = append(comments, narrative.Comment{
 			Author:    c.Author,
 			CreatedAt: c.CreatedAt,
 			Body:      body,
 		})
 	}
-	if len(comments) > MaxComments {
-		comments = comments[len(comments)-MaxComments:]
+	if len(comments) > narrative.MaxComments {
+		comments = comments[len(comments)-narrative.MaxComments:]
 	}
 
 	// Build narrative events (chronological, capped at MaxEvents most recent).
-	var events []NarrativeEvent
+	var events []narrative.Event
 	for _, e := range rawEvents {
-		events = append(events, NarrativeEvent{
+		events = append(events, narrative.Event{
 			Type:   e.Type,
 			Actor:  e.Actor,
 			At:     e.At,
 			Detail: e.Detail,
 		})
 	}
-	if len(events) > MaxEvents {
-		events = events[len(events)-MaxEvents:]
+	if len(events) > narrative.MaxEvents {
+		events = events[len(events)-narrative.MaxEvents:]
 	}
 
-	item := NarrativeItem{
+	item := narrative.Item{
 		URL:            ref.URL,
 		Title:          issueData.Title,
-		Body:           truncate(issueData.Body, MaxBodyChars),
+		Body:           truncate(issueData.Body, narrative.MaxBodyChars),
 		State:          issueData.State,
 		IsPR:           ref.IsPR,
 		Author:         ref.AuthorLogin,

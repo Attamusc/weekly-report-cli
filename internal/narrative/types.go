@@ -6,6 +6,15 @@ package narrative
 
 import "time"
 
+// Truncation caps applied at collection time for Item fields.
+// These bound token budget for the narrative AI call.
+const (
+	MaxBodyChars    = 500 // max chars for issue/PR body
+	MaxCommentChars = 300 // max chars per comment body
+	MaxComments     = 5   // max recent comments per item
+	MaxEvents       = 10  // max timeline events per item
+)
+
 // Item is the rich per-survivor data shape consumed by the narrative AI call.
 // It is populated by the Tier-2 hydration phase and passed directly to
 // WriteNarrative.

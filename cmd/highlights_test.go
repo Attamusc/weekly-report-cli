@@ -5,17 +5,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/Attamusc/weekly-report-cli/internal/ai"
 	"github.com/Attamusc/weekly-report-cli/internal/config"
-	"github.com/Attamusc/weekly-report-cli/internal/format"
 	internalgh "github.com/Attamusc/weekly-report-cli/internal/github"
 	"github.com/Attamusc/weekly-report-cli/internal/input"
 	"github.com/Attamusc/weekly-report-cli/internal/narrative"
-	"github.com/Attamusc/weekly-report-cli/internal/pipeline"
 	"github.com/Attamusc/weekly-report-cli/internal/rollup"
 )
 
@@ -106,8 +103,8 @@ func makeRef(_, repo string, number int, isPR bool, commentCount int, author str
 
 // ── WriteNarrative integration tests ──────────────────────────────────────────
 
-// TestWriteNarrativePath verifies the AI path passes narrativeItems to WriteNarrative
-// and the sections flow into RenderHighlights via the placeholder conversion.
+// TestWriteNarrativePath verifies the AI path passes narrative.Items to WriteNarrative
+// and that the returned sections are non-empty.
 func TestWriteNarrativePath(t *testing.T) {
 	expectedNarr := ai.Narrative{
 		Sections: []ai.NarrativeSection{
@@ -125,8 +122,7 @@ func TestWriteNarrativePath(t *testing.T) {
 		},
 	}
 
-	// Build narrative items.
-	narItems := []pipeline.NarrativeItem{
+	items := []narrative.Item{
 		{
 			URL:   "https://github.com/org/repo/issues/1",
 			Title: "Fix login bug",
@@ -134,28 +130,16 @@ func TestWriteNarrativePath(t *testing.T) {
 		},
 	}
 
-	// Convert and call.
-	narrItems := pipelineToNarrativeItems(narItems)
-	narr, err := fake.WriteNarrative(context.Background(), narrItems, rollup.Rollup{})
+	narr, err := fake.WriteNarrative(context.Background(), items, rollup.Rollup{})
 	if err != nil {
 		t.Fatalf("WriteNarrative error: %v", err)
 	}
 
-	// Build placeholder highlights and render.
-	var highlights []ai.Highlight
-	for _, sec := range narr.Sections {
-		highlights = append(highlights, ai.Highlight{Theme: sec.Heading, Summary: sec.Body})
+	if len(narr.Sections) == 0 {
+		t.Fatal("expected non-empty sections")
 	}
-
-	output := format.RenderHighlights(highlights)
-	if output == "" {
-		t.Fatal("expected non-empty output")
-	}
-	if !strings.Contains(output, "Bug Fixes") {
-		t.Errorf("expected 'Bug Fixes' in output, got:\n%s", output)
-	}
-	if !strings.Contains(output, "Infrastructure") {
-		t.Errorf("expected 'Infrastructure' in output, got:\n%s", output)
+	if narr.Sections[0].Heading != "Bug Fixes" {
+		t.Errorf("expected 'Bug Fixes', got %q", narr.Sections[0].Heading)
 	}
 }
 
@@ -168,11 +152,11 @@ func TestWriteNarrativeErrorFallback(t *testing.T) {
 		},
 	}
 
-	narItems := pipelineToNarrativeItems([]pipeline.NarrativeItem{
+	items := []narrative.Item{
 		{URL: "https://github.com/org/repo/issues/1", Title: "thing", Body: "body"},
-	})
+	}
 
-	narr, err := fake.WriteNarrative(context.Background(), narItems, rollup.Rollup{})
+	narr, err := fake.WriteNarrative(context.Background(), items, rollup.Rollup{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -182,13 +166,8 @@ func TestWriteNarrativeErrorFallback(t *testing.T) {
 		narr = ai.Narrative{}
 	}
 
-	var highlights []ai.Highlight
-	for _, sec := range narr.Sections {
-		highlights = append(highlights, ai.Highlight{Theme: sec.Heading, Summary: sec.Body})
-	}
-	// With empty narrative, highlights is nil — RenderHighlights returns "".
-	if len(highlights) != 0 {
-		t.Errorf("expected empty highlights after error fallback, got %d", len(highlights))
+	if len(narr.Sections) != 0 {
+		t.Errorf("expected empty sections after error fallback, got %d", len(narr.Sections))
 	}
 }
 
@@ -253,15 +232,11 @@ func TestRenderNoSummaryPath(t *testing.T) {
 
 	since := now.AddDate(0, 0, -7)
 	r := rollup.Compute([]input.IssueRef{ref}, since)
-	output := format.RenderRollup(r)
 
-	if !strings.Contains(output, "@alice") {
-		t.Errorf("expected @alice in rollup output, got:\n%s", output)
+	if len(r.ByAuthor) == 0 {
+		t.Error("expected non-empty ByAuthor in rollup")
 	}
-	if !strings.Contains(output, "Fix login bug") {
-		t.Errorf("expected issue title in rollup output, got:\n%s", output)
-	}
-	if output == "" {
-		t.Error("expected non-empty rollup output")
+	if _, ok := r.ByAuthor["alice"]; !ok {
+		t.Errorf("expected alice in rollup ByAuthor, got keys: %v", r.ByAuthor)
 	}
 }

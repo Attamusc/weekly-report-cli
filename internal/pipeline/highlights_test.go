@@ -8,6 +8,7 @@ import (
 
 	"github.com/Attamusc/weekly-report-cli/internal/github"
 	"github.com/Attamusc/weekly-report-cli/internal/input"
+	"github.com/Attamusc/weekly-report-cli/internal/narrative"
 )
 
 // mockNarrativeFetcher implements IssueFetcher for highlights tests.
@@ -41,12 +42,12 @@ func TestCollectNarrativeItem_FullyPopulated(t *testing.T) {
 	closedAt := now.AddDate(0, 0, -1)
 	mergedAt := now.AddDate(0, 0, -2)
 
-	longBody := make([]byte, MaxBodyChars+100)
+	longBody := make([]byte, narrative.MaxBodyChars+100)
 	for i := range longBody {
 		longBody[i] = 'x'
 	}
 
-	longComment := make([]byte, MaxCommentChars+50)
+	longComment := make([]byte, narrative.MaxCommentChars+50)
 	for i := range longComment {
 		longComment[i] = 'y'
 	}
@@ -99,8 +100,8 @@ func TestCollectNarrativeItem_FullyPopulated(t *testing.T) {
 	}
 
 	// Body truncated
-	if len(item.Body) != MaxBodyChars {
-		t.Errorf("expected body truncated to %d chars, got %d", MaxBodyChars, len(item.Body))
+	if len(item.Body) != narrative.MaxBodyChars {
+		t.Errorf("expected body truncated to %d chars, got %d", narrative.MaxBodyChars, len(item.Body))
 	}
 
 	// IsPR and author
@@ -123,8 +124,8 @@ func TestCollectNarrativeItem_FullyPopulated(t *testing.T) {
 	if len(item.RecentComments) != 2 {
 		t.Fatalf("expected 2 comments, got %d", len(item.RecentComments))
 	}
-	if len(item.RecentComments[0].Body) != MaxCommentChars {
-		t.Errorf("expected first comment truncated to %d chars, got %d", MaxCommentChars, len(item.RecentComments[0].Body))
+	if len(item.RecentComments[0].Body) != narrative.MaxCommentChars {
+		t.Errorf("expected first comment truncated to %d chars, got %d", narrative.MaxCommentChars, len(item.RecentComments[0].Body))
 	}
 	if item.RecentComments[0].Author != "bob" {
 		t.Errorf("expected comment author 'bob', got %q", item.RecentComments[0].Author)
@@ -162,7 +163,7 @@ func TestCollectNarrativeItem_FullyPopulated(t *testing.T) {
 func TestCollectNarrativeItem_TruncatesComments_KeepsMostRecent(t *testing.T) {
 	since := time.Now().AddDate(0, 0, -7)
 
-	comments := make([]github.Comment, MaxComments+3)
+	comments := make([]github.Comment, narrative.MaxComments+3)
 	for i := range comments {
 		comments[i] = github.Comment{
 			Author:    fmt.Sprintf("user%d", i),
@@ -186,14 +187,14 @@ func TestCollectNarrativeItem_TruncatesComments_KeepsMostRecent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(item.RecentComments) != MaxComments {
-		t.Errorf("expected %d comments (most recent), got %d", MaxComments, len(item.RecentComments))
+	if len(item.RecentComments) != narrative.MaxComments {
+		t.Errorf("expected %d comments (most recent), got %d", narrative.MaxComments, len(item.RecentComments))
 	}
 
-	// Should be the last MaxComments (most recent)
+	// Should be the last narrative.MaxComments (most recent)
 	lastAuthor := fmt.Sprintf("user%d", len(comments)-1)
-	if item.RecentComments[MaxComments-1].Author != lastAuthor {
-		t.Errorf("expected last comment from %s, got %s", lastAuthor, item.RecentComments[MaxComments-1].Author)
+	if item.RecentComments[narrative.MaxComments-1].Author != lastAuthor {
+		t.Errorf("expected last comment from %s, got %s", lastAuthor, item.RecentComments[narrative.MaxComments-1].Author)
 	}
 }
 

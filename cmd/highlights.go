@@ -24,34 +24,37 @@ import (
 )
 
 var (
-	highlightsUsers         string
-	highlightsOrgs          string
-	highlightsSinceDays     int
-	highlightsConcurrency   int
-	highlightsAIConcurrency int
-	highlightsAITop         int
-	highlightsVerbose       bool
-	highlightsQuiet         bool
-	highlightsPrompt        string
-	highlightsNoSummary     bool
+	highlightsUsers       string
+	highlightsOrgs        string
+	highlightsSinceDays   int
+	highlightsConcurrency int
+	highlightsAITop       int
+	highlightsVerbose     bool
+	highlightsQuiet       bool
+	highlightsPrompt      string
+	highlightsNoSummary   bool
 )
 
 var highlightsCmd = &cobra.Command{
 	Use:   "highlights",
 	Short: "Surface notable smaller work from the past week",
 	Long: `Highlights discovers issues and PRs touched by a set of GitHub users,
-then scores and ranks them via a deterministic mechanical rollup. By default,
-the top-scoring items are curated and summarized by AI, grouped by theme.
+then scores and ranks them via a deterministic mechanical rollup. The top-
+scoring items are hydrated with rich context (body, comments, timeline) and
+sent in a single AI call that writes a narrative report grouped by theme.
 
 With --no-summary, the command prints the full mechanical rollup grouped by
-author without making any AI calls — useful for quick scans or when AI is
-unavailable.
+author without making any AI calls — pipe-friendly and instant.
 
-Pipeline: discover → rollup → cut (top-N by score) → narrow hydrate →
-  AI map (one call per survivor) → AI reduce (theme merge) → render.
+Pipeline: discover → rollup → cut (top-N by score) → tier-2 hydrate →
+  single WriteNarrative AI call → render narrative + rollup.
+
+Design: the narrative gives the story; the full rollup beneath it gives the
+detail. Nothing is hidden — scan narrative for context, rollup for specific
+people and repos.
 
 Examples:
-  # Basic usage (AI-curated highlights by theme)
+  # Basic usage (AI narrative + full rollup)
   weekly-report-cli highlights --users "user1,user2,user3"
 
   # Scoped to specific orgs
@@ -63,11 +66,8 @@ Examples:
   # Mechanical rollup only (no AI), grouped by author
   weekly-report-cli highlights --users "user1,user2" --no-summary
 
-  # Limit AI processing to top 20 items
-  weekly-report-cli highlights --users "user1,user2" --ai-top 20
-
-  # Increase AI concurrency for larger teams
-  weekly-report-cli highlights --users "user1,user2" --ai-concurrency 10
+  # Limit AI input to top 30 items
+  weekly-report-cli highlights --users "user1,user2" --ai-top 30
 
   # With verbose logging
   weekly-report-cli highlights --users "user1,user2" --verbose`,
@@ -81,11 +81,10 @@ func init() {
 	highlightsCmd.Flags().StringVar(&highlightsOrgs, "orgs", "", "Comma-separated GitHub org names to scope results to")
 	highlightsCmd.Flags().IntVar(&highlightsSinceDays, "since-days", 7, "Number of days to look back")
 	highlightsCmd.Flags().IntVar(&highlightsConcurrency, "concurrency", 5, "Max concurrent API requests for hydration")
-	highlightsCmd.Flags().IntVar(&highlightsAIConcurrency, "ai-concurrency", 5, "Max concurrent AI requests for the map step")
-	highlightsCmd.Flags().IntVar(&highlightsAITop, "ai-top", 50, "Maximum number of top-scored items to send to AI")
+	highlightsCmd.Flags().IntVar(&highlightsAITop, "ai-top", 100, "Maximum number of top-scored items to send to AI")
 	highlightsCmd.Flags().BoolVar(&highlightsVerbose, "verbose", false, "Enable verbose logging")
 	highlightsCmd.Flags().BoolVar(&highlightsQuiet, "quiet", false, "Suppress progress output")
-	highlightsCmd.Flags().StringVar(&highlightsPrompt, "summary-prompt", "", "Custom AI system prompt for highlights curation")
+	highlightsCmd.Flags().StringVar(&highlightsPrompt, "summary-prompt", "", "Custom AI system prompt for narrative curation")
 	highlightsCmd.Flags().BoolVar(&highlightsNoSummary, "no-summary", false, "Disable AI curation (print mechanical rollup by author)")
 	_ = highlightsCmd.MarkFlagRequired("users")
 }
@@ -94,9 +93,6 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	// Validate flags.
 	if highlightsAITop <= 0 {
 		return fmt.Errorf("--ai-top must be > 0")
-	}
-	if highlightsAIConcurrency <= 0 {
-		return fmt.Errorf("--ai-concurrency must be > 0")
 	}
 
 	users := parseUsers(highlightsUsers)
@@ -179,7 +175,7 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 		os.Exit(2)
 	}
 
-	// ========== PHASE D: Narrow hydrate ==========
+	// ========== PHASE D: Tier-2 hydration ==========
 	survivorRefs := make([]input.IssueRef, len(survivors))
 	for i, s := range survivors {
 		survivorRefs[i] = s.Ref
@@ -190,10 +186,8 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	logger.Info("Hydration complete", "hydrated", len(hydratedItems))
 
 	// ========== PHASE E: AI narrative call ==========
-	narrativeItems := pipelineToNarrativeItems(hydratedItems)
-
-	logger.Info("Starting narrative AI call", "items", len(narrativeItems))
-	narr, err := summarizer.WriteNarrative(ctx, narrativeItems, r)
+	logger.Info("Starting narrative AI call", "items", len(hydratedItems))
+	narr, err := summarizer.WriteNarrative(ctx, hydratedItems, r)
 	if err != nil {
 		logger.Warn("Narrative AI call failed; rendering rollup only", "error", err)
 		narr = ai.Narrative{}
@@ -211,31 +205,6 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// pipelineToNarrativeItems converts []pipeline.NarrativeItem to []narrative.Item
-// for the AI layer, which lives in a separate package to avoid import cycles.
-func pipelineToNarrativeItems(src []pipeline.NarrativeItem) []narrative.Item {
-	out := make([]narrative.Item, len(src))
-	for i, s := range src {
-		comments := make([]narrative.Comment, len(s.RecentComments))
-		for j, c := range s.RecentComments {
-			comments[j] = narrative.Comment{Author: c.Author, CreatedAt: c.CreatedAt, Body: c.Body}
-		}
-		events := make([]narrative.Event, len(s.Events))
-		for j, e := range s.Events {
-			events[j] = narrative.Event{Type: e.Type, Actor: e.Actor, At: e.At, Detail: e.Detail}
-		}
-		out[i] = narrative.Item{
-			URL: s.URL, Title: s.Title, Body: s.Body,
-			State: s.State, IsPR: s.IsPR, Author: s.Author,
-			Assignees: s.Assignees, Labels: s.Labels,
-			OpenedAt: s.OpenedAt, ClosedAt: s.ClosedAt, MergedAt: s.MergedAt,
-			ClosedThisWeek: s.ClosedThisWeek, MergedThisWeek: s.MergedThisWeek,
-			RecentComments: comments, Events: events,
-		}
-	}
-	return out
-}
-
 // parseUsers splits a comma-separated user string into trimmed, non-empty handles.
 func parseUsers(raw string) []string {
 	var users []string
@@ -248,9 +217,13 @@ func parseUsers(raw string) []string {
 	return users
 }
 
-// collectNarrativeItemsParallel fetches rich Tier-2 NarrativeItem data in parallel.
-func collectNarrativeItemsParallel(ctx context.Context, fetcher pipeline.IssueFetcher, refs []input.IssueRef, cfg *config.Config, since time.Time, logger *slog.Logger) []pipeline.NarrativeItem {
-	resultCh := make(chan pipeline.NarrativeItemResult, len(refs))
+// collectNarrativeItemsParallel fetches rich Tier-2 narrative.Item data in parallel.
+func collectNarrativeItemsParallel(ctx context.Context, fetcher pipeline.IssueFetcher, refs []input.IssueRef, cfg *config.Config, since time.Time, logger *slog.Logger) []narrative.Item {
+	type result struct {
+		item narrative.Item
+		err  error
+	}
+	resultCh := make(chan result, len(refs))
 	semaphore := make(chan struct{}, cfg.Concurrency)
 
 	var completed atomic.Int32
@@ -273,7 +246,7 @@ func collectNarrativeItemsParallel(ctx context.Context, fetcher pipeline.IssueFe
 					"url", ref.URL)
 			}
 
-			resultCh <- pipeline.NarrativeItemResult{Data: item, Err: err}
+			resultCh <- result{item: item, err: err}
 		}(ref)
 	}
 
@@ -282,13 +255,13 @@ func collectNarrativeItemsParallel(ctx context.Context, fetcher pipeline.IssueFe
 		close(resultCh)
 	}()
 
-	var items []pipeline.NarrativeItem
-	for result := range resultCh {
-		if result.Err != nil {
-			logger.Debug("Error collecting narrative item", "error", result.Err)
+	var items []narrative.Item
+	for res := range resultCh {
+		if res.err != nil {
+			logger.Debug("Error collecting narrative item", "error", res.err)
 			continue
 		}
-		items = append(items, result.Data)
+		items = append(items, res.item)
 	}
 
 	return items

@@ -47,15 +47,6 @@ type HeaderItem struct {
 	Summary          string  // The update summary text
 }
 
-// Highlight represents a single curated highlight from AI processing.
-// Retained for Phase 2 temporary rendering path; deleted in Phase 4.
-type Highlight struct {
-	Theme   string // Category: "Bug Fixes", "Support & Reliability", "Infrastructure", etc.
-	Title   string // Issue/PR title
-	URL     string // Issue/PR URL
-	Summary string // AI-written 1-line highlight
-}
-
 // Narrative is the output of a WriteNarrative call.
 type Narrative struct {
 	Sections []NarrativeSection
