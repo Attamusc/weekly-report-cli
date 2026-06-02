@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Attamusc/weekly-report-cli/internal/input"
+	"github.com/Attamusc/weekly-report-cli/internal/narrative"
 	"github.com/Attamusc/weekly-report-cli/internal/rollup"
 )
 
@@ -52,8 +53,8 @@ func TestRenderRollup(t *testing.T) {
 			}(),
 			wantContains: []string{
 				"## @alice",
-				"| Item | Title | State | Score | Labels |",
-				"|------|-------|-------|-------|--------|",
+				"| Item | Title | State | Score | Activity | Labels |",
+				"|------|-------|-------|-------|----------|--------|",
 				"[myrepo#42](https://github.com/org/myrepo/issues/42)",
 				"Fix bug",
 				"open",
@@ -121,7 +122,7 @@ func TestRenderRollup(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := RenderRollup(tc.rollup)
+			got := RenderRollup(tc.rollup, nil, nil, time.Time{})
 
 			if tc.wantEmpty {
 				if got != "" {
@@ -149,5 +150,258 @@ func TestRenderRollup(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ── Attribution tests ──────────────────────────────────────────────────────────
+
+// makeHydrated builds a minimal hydrated map keyed by URL.
+func makeHydrated(items ...narrative.Item) map[string]narrative.Item {
+	m := make(map[string]narrative.Item, len(items))
+	for _, it := range items {
+		m[it.URL] = it
+	}
+	return m
+}
+
+func makeRollupItem(url string, num int, author string) rollup.ScoredItem {
+	return rollup.ScoredItem{
+		Ref: input.IssueRef{
+			Repo:   "repo",
+			Number: num,
+			URL:    url,
+			Title:  "repo title",
+			State:  "open",
+		},
+		Score:  0.50,
+		Author: author,
+		Labels: nil,
+	}
+}
+
+func singleItemRollup(item rollup.ScoredItem) rollup.Rollup {
+	return rollup.Rollup{
+		ByAuthor:  map[string][]rollup.ScoredItem{item.Author: {item}},
+		AllSorted: []rollup.ScoredItem{item},
+	}
+}
+
+func TestRenderRollup_AttributionFromRecentComment(t *testing.T) {
+	const url = "https://github.com/org/repo/issues/1"
+	item := makeRollupItem(url, 1, "jaeden")
+	r := singleItemRollup(item)
+
+	now := time.Now()
+	hi := narrative.Item{
+		URL:      url,
+		Author:   "jaeden",
+		OpenedAt: now.AddDate(0, 0, -30),
+		RecentComments: []narrative.Comment{
+			{Author: "external-person", CreatedAt: now.Add(-3 * 24 * time.Hour)},
+			{Author: "gina", CreatedAt: now.Add(-2 * 24 * time.Hour)},
+		},
+	}
+	hydrated := makeHydrated(hi)
+	users := []string{"gina"}
+	since := now.AddDate(0, 0, -7)
+
+	got := RenderRollup(r, hydrated, users, since)
+
+	if !strings.Contains(got, "## @gina") {
+		t.Errorf("expected attribution to @gina; got:\n%s", got)
+	}
+	if !strings.Contains(got, "commented") {
+		t.Errorf("expected 'commented' in activity; got:\n%s", got)
+	}
+	if !strings.Contains(got, "by @gina") {
+		t.Errorf("expected 'by @gina' in activity; got:\n%s", got)
+	}
+	if strings.Contains(got, "## @jaeden") {
+		t.Errorf("should not attribute to opener @jaeden; got:\n%s", got)
+	}
+}
+
+func TestRenderRollup_AttributionFromClosure(t *testing.T) {
+	const url = "https://github.com/org/repo/issues/2"
+	item := makeRollupItem(url, 2, "jaeden")
+	r := singleItemRollup(item)
+
+	now := time.Now()
+	closedAt := now.Add(-2 * 24 * time.Hour)
+	hi := narrative.Item{
+		URL:            url,
+		Author:         "jaeden",
+		OpenedAt:       now.AddDate(0, 0, -30),
+		ClosedThisWeek: true,
+		ClosedAt:       &closedAt,
+		Events: []narrative.Event{
+			{Type: "closed", Actor: "bob", At: closedAt},
+		},
+	}
+	hydrated := makeHydrated(hi)
+	users := []string{"bob"}
+	since := now.AddDate(0, 0, -7)
+
+	got := RenderRollup(r, hydrated, users, since)
+
+	if !strings.Contains(got, "## @bob") {
+		t.Errorf("expected attribution to @bob; got:\n%s", got)
+	}
+	if !strings.Contains(got, "closed") {
+		t.Errorf("expected 'closed' in activity; got:\n%s", got)
+	}
+	if !strings.Contains(got, "by @bob") {
+		t.Errorf("expected 'by @bob' in activity; got:\n%s", got)
+	}
+}
+
+func TestRenderRollup_AttributionFromMerge(t *testing.T) {
+	const url = "https://github.com/org/repo/pull/3"
+	item := makeRollupItem(url, 3, "jaeden")
+	r := singleItemRollup(item)
+
+	now := time.Now()
+	mergedAt := now.Add(-1 * 24 * time.Hour)
+	hi := narrative.Item{
+		URL:            url,
+		Author:         "jaeden",
+		IsPR:           true,
+		OpenedAt:       now.AddDate(0, 0, -10),
+		MergedThisWeek: true,
+		MergedAt:       &mergedAt,
+		Events: []narrative.Event{
+			{Type: "merged", Actor: "alice", At: mergedAt},
+		},
+	}
+	hydrated := makeHydrated(hi)
+	users := []string{"alice"}
+	since := now.AddDate(0, 0, -7)
+
+	got := RenderRollup(r, hydrated, users, since)
+
+	if !strings.Contains(got, "## @alice") {
+		t.Errorf("expected attribution to @alice; got:\n%s", got)
+	}
+	if !strings.Contains(got, "merged") {
+		t.Errorf("expected 'merged' in activity; got:\n%s", got)
+	}
+	if !strings.Contains(got, "by @alice") {
+		t.Errorf("expected 'by @alice' in activity; got:\n%s", got)
+	}
+}
+
+func TestRenderRollup_FallbackToOriginalAuthor(t *testing.T) {
+	const url = "https://github.com/org/repo/issues/4"
+	item := makeRollupItem(url, 4, "carol")
+	r := singleItemRollup(item)
+
+	now := time.Now()
+	hi := narrative.Item{
+		URL:            url,
+		Author:         "carol",
+		OpenedAt:       now.AddDate(0, 0, -14),
+		RecentComments: []narrative.Comment{}, // no comments
+	}
+	hydrated := makeHydrated(hi)
+	users := []string{"carol"}
+	since := now.AddDate(0, 0, -7)
+
+	got := RenderRollup(r, hydrated, users, since)
+
+	if !strings.Contains(got, "## @carol") {
+		t.Errorf("expected fallback attribution to @carol; got:\n%s", got)
+	}
+	if !strings.Contains(got, "opened") {
+		t.Errorf("expected 'opened' in activity for fallback; got:\n%s", got)
+	}
+	if !strings.Contains(got, "by @carol") {
+		t.Errorf("expected 'by @carol' in activity; got:\n%s", got)
+	}
+}
+
+func TestRenderRollup_IgnoresExternalActivity(t *testing.T) {
+	const url = "https://github.com/org/repo/issues/5"
+	item := makeRollupItem(url, 5, "alice")
+	r := singleItemRollup(item)
+
+	now := time.Now()
+	hi := narrative.Item{
+		URL:      url,
+		Author:   "alice",
+		OpenedAt: now.AddDate(0, 0, -5),
+		RecentComments: []narrative.Comment{
+			{Author: "external-bot", CreatedAt: now.Add(-1 * time.Hour)},
+			{Author: "random-outsider", CreatedAt: now.Add(-2 * time.Hour)},
+		},
+	}
+	hydrated := makeHydrated(hi)
+	users := []string{"alice"}
+	since := now.AddDate(0, 0, -7)
+
+	got := RenderRollup(r, hydrated, users, since)
+
+	// External commenters are not in users list, so attribution falls back to author.
+	if !strings.Contains(got, "## @alice") {
+		t.Errorf("expected attribution to @alice (author), not external commenter; got:\n%s", got)
+	}
+	if strings.Contains(got, "## @external-bot") || strings.Contains(got, "## @random-outsider") {
+		t.Errorf("should not attribute to external users; got:\n%s", got)
+	}
+	if !strings.Contains(got, "opened") {
+		t.Errorf("expected 'opened' in activity for fallback; got:\n%s", got)
+	}
+}
+
+func TestRenderRollup_ItemNotHydrated(t *testing.T) {
+	const url = "https://github.com/org/repo/issues/6"
+	item := makeRollupItem(url, 6, "dave")
+	r := singleItemRollup(item)
+
+	// Empty hydrated map — item not present.
+	hydrated := map[string]narrative.Item{}
+	users := []string{"dave"}
+	since := time.Now().AddDate(0, 0, -7)
+
+	got := RenderRollup(r, hydrated, users, since)
+
+	if !strings.Contains(got, "## @dave") {
+		t.Errorf("expected fallback to ref.AuthorLogin @dave; got:\n%s", got)
+	}
+	if !strings.Contains(got, "| — |") {
+		t.Errorf("expected activity '—' for non-hydrated item; got:\n%s", got)
+	}
+}
+
+func TestRenderRollup_BotFilteredImplicitly(t *testing.T) {
+	const url = "https://github.com/org/repo/issues/7"
+	item := makeRollupItem(url, 7, "alice")
+	r := singleItemRollup(item)
+
+	now := time.Now()
+	hi := narrative.Item{
+		URL:      url,
+		Author:   "alice",
+		OpenedAt: now.AddDate(0, 0, -3),
+		RecentComments: []narrative.Comment{
+			// Bot commenters — not in users list.
+			{Author: "dependabot[bot]", CreatedAt: now.Add(-1 * time.Hour)},
+			{Author: "github-actions[bot]", CreatedAt: now.Add(-2 * time.Hour)},
+		},
+	}
+	hydrated := makeHydrated(hi)
+	users := []string{"alice"} // bots are not here
+	since := now.AddDate(0, 0, -7)
+
+	got := RenderRollup(r, hydrated, users, since)
+
+	// Bots not in users list → ignored; fallback to author.
+	if !strings.Contains(got, "## @alice") {
+		t.Errorf("expected attribution to @alice; got:\n%s", got)
+	}
+	if strings.Contains(got, "dependabot") || strings.Contains(got, "github-actions") {
+		t.Errorf("bot names should not appear in attribution; got:\n%s", got)
+	}
+	if !strings.Contains(got, "opened") {
+		t.Errorf("expected 'opened' in activity (fallback to author); got:\n%s", got)
 	}
 }

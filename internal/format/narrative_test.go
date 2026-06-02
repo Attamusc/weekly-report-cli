@@ -54,7 +54,7 @@ func threeItemRollup() rollup.Rollup {
 func TestRenderNarrativeReport_FullReport(t *testing.T) {
 	n := threeSection()
 	r := threeItemRollup()
-	out := RenderNarrativeReport(n, r, 7)
+	out := RenderNarrativeReport(n, r, 7, nil, nil, time.Time{})
 
 	checks := []string{
 		"# Weekly Highlights — Last 7 days (3 items)",
@@ -66,7 +66,7 @@ func TestRenderNarrativeReport_FullReport(t *testing.T) {
 		"### Feature progress",
 		"new dashboard is 80%",
 		"## All activity (3 items)",
-		"| Item | Title | State | Score | Labels |",
+		"| Item | Title | State | Score | Activity | Labels |",
 	}
 	for _, want := range checks {
 		if !strings.Contains(out, want) {
@@ -77,7 +77,7 @@ func TestRenderNarrativeReport_FullReport(t *testing.T) {
 
 func TestRenderNarrativeReport_EmptyNarrative(t *testing.T) {
 	r := threeItemRollup()
-	out := RenderNarrativeReport(ai.Narrative{}, r, 7)
+	out := RenderNarrativeReport(ai.Narrative{}, r, 7, nil, nil, time.Time{})
 
 	if strings.Contains(out, "## Narrative") {
 		t.Errorf("expected no ## Narrative heading when narrative is empty; got:\n%s", out)
@@ -91,7 +91,7 @@ func TestRenderNarrativeReport_EmptyNarrative(t *testing.T) {
 }
 
 func TestRenderNarrativeReport_EmptyRollup(t *testing.T) {
-	out := RenderNarrativeReport(ai.Narrative{}, rollup.Rollup{}, 7)
+	out := RenderNarrativeReport(ai.Narrative{}, rollup.Rollup{}, 7, nil, nil, time.Time{})
 	if out != "" {
 		t.Errorf("expected empty string when both narrative and rollup are empty; got %q", out)
 	}
@@ -99,7 +99,7 @@ func TestRenderNarrativeReport_EmptyRollup(t *testing.T) {
 
 func TestRenderNarrativeReport_NarrativeOnly(t *testing.T) {
 	n := threeSection()
-	out := RenderNarrativeReport(n, rollup.Rollup{}, 7)
+	out := RenderNarrativeReport(n, rollup.Rollup{}, 7, nil, nil, time.Time{})
 
 	if !strings.Contains(out, "## Narrative") {
 		t.Errorf("expected ## Narrative heading; got:\n%s", out)
@@ -167,7 +167,7 @@ func TestRenderNarrativeReport_LargeFixture(t *testing.T) {
 		}
 	}
 
-	out := RenderNarrativeReport(n, r, 14)
+	out := RenderNarrativeReport(n, r, 14, nil, nil, time.Time{})
 	t.Log("\n" + out)
 
 	if !strings.Contains(out, "# Weekly Highlights — Last 14 days (30 items)") {

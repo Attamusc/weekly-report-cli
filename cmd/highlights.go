@@ -154,7 +154,7 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	// ========== PHASE C: Cut ==========
 	// If --no-summary or AI disabled, render the mechanical rollup and exit.
 	if highlightsNoSummary || !cfg.Models.Enabled {
-		output := format.RenderRollup(r)
+		output := format.RenderRollup(r, nil, users, since)
 		if output == "" {
 			if !cfg.Quiet {
 				fmt.Fprintln(os.Stderr, "No notable highlights found.")
@@ -194,7 +194,11 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	}
 
 	// ========== PHASE F: Render ==========
-	output := format.RenderNarrativeReport(narr, r, cfg.SinceDays)
+	hydratedMap := make(map[string]narrative.Item, len(hydratedItems))
+	for _, item := range hydratedItems {
+		hydratedMap[item.URL] = item
+	}
+	output := format.RenderNarrativeReport(narr, r, cfg.SinceDays, hydratedMap, users, since)
 	if output == "" {
 		if !cfg.Quiet {
 			fmt.Fprintln(os.Stderr, "No notable highlights found.")
