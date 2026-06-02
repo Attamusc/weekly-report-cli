@@ -81,6 +81,14 @@ func (m *mockHighlightFetcher) FetchCommentsSince(_ context.Context, ref input.I
 	return m.comments[ref.URL], nil
 }
 
+func (m *mockHighlightFetcher) FetchTimelineSince(_ context.Context, _ input.IssueRef, _ time.Time) ([]internalgh.TimelineEvent, error) {
+	return nil, nil
+}
+
+func (m *mockHighlightFetcher) FetchPullRequest(_ context.Context, _ input.IssueRef) (*internalgh.PullRequestData, error) {
+	return nil, nil
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 func testLogger() *slog.Logger {
@@ -208,13 +216,13 @@ func TestAIMapHighlights_SkipsAIForEmptyUpdateTexts(t *testing.T) {
 		},
 	}
 
-	// Provide hydrated data with empty UpdateTexts.
-	dataByURL := map[string]pipeline.HighlightData{
+	// Provide hydrated data with empty RecentComments.
+	dataByURL := map[string]pipeline.NarrativeItem{
 		ref.URL: {
-			IssueURL:    ref.URL,
-			IssueTitle:  ref.Title,
-			UpdateTexts: []string{}, // empty — no comment bodies
-			Labels:      []string{"bug"},
+			URL:            ref.URL,
+			Title:          ref.Title,
+			RecentComments: []pipeline.NarrativeComment{}, // empty — no comment bodies
+			Labels:         []string{"bug"},
 		},
 	}
 
@@ -270,13 +278,15 @@ func TestScoredItemToHighlightItem_HydrationFillsMissingFields(t *testing.T) {
 	ref.State = ""
 
 	scored := rollup.ScoredItem{Ref: ref, Score: 0.4}
-	dataByURL := map[string]pipeline.HighlightData{
+	dataByURL := map[string]pipeline.NarrativeItem{
 		ref.URL: {
-			IssueURL:    ref.URL,
-			IssueTitle:  "Hydrated Title",
-			IssueState:  "closed",
-			Labels:      []string{"bug"},
-			UpdateTexts: []string{"fixed"},
+			URL:    ref.URL,
+			Title:  "Hydrated Title",
+			State:  "closed",
+			Labels: []string{"bug"},
+			RecentComments: []pipeline.NarrativeComment{
+				{Body: "fixed"},
+			},
 		},
 	}
 
@@ -324,9 +334,9 @@ func TestFallbackHighlight_NoLabels(t *testing.T) {
 	}
 }
 
-// ── collectHighlightDataParallel tests ────────────────────────────────────
+// ── collectNarrativeItemsParallel tests ─────────────────────────────────────
 
-func TestCollectHighlightDataParallel_HydrationSuccess(t *testing.T) {
+func TestCollectNarrativeItemsParallel_HydrationSuccess(t *testing.T) {
 	ref1 := makeRef("org", "repo", 1, false, 3, "alice")
 	ref2 := makeRef("org", "repo", 2, true, 5, "bob")
 
@@ -339,14 +349,14 @@ func TestCollectHighlightDataParallel_HydrationSuccess(t *testing.T) {
 	}
 
 	since := time.Now().AddDate(0, 0, -7)
-	data := collectHighlightDataParallel(context.Background(), fetcher, []input.IssueRef{ref1, ref2}, quietCfg(2), since, testLogger())
+	data := collectNarrativeItemsParallel(context.Background(), fetcher, []input.IssueRef{ref1, ref2}, quietCfg(2), since, testLogger())
 
 	if len(data) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(data))
 	}
 }
 
-func TestCollectHighlightDataParallel_ErrorsSkipped(t *testing.T) {
+func TestCollectNarrativeItemsParallel_ErrorsSkipped(t *testing.T) {
 	ref := makeRef("org", "repo", 99, false, 0, "")
 
 	fetcher := &mockHighlightFetcher{
@@ -355,7 +365,7 @@ func TestCollectHighlightDataParallel_ErrorsSkipped(t *testing.T) {
 	}
 
 	since := time.Now().AddDate(0, 0, -7)
-	data := collectHighlightDataParallel(context.Background(), fetcher, []input.IssueRef{ref}, quietCfg(1), since, testLogger())
+	data := collectNarrativeItemsParallel(context.Background(), fetcher, []input.IssueRef{ref}, quietCfg(1), since, testLogger())
 
 	if len(data) != 0 {
 		t.Errorf("expected 0 results after error, got %d", len(data))
@@ -413,10 +423,10 @@ func TestRenderAIPath(t *testing.T) {
 	}
 
 	fake := &fakeAISummarizer{}
-	// Provide non-empty UpdateTexts so the AI-skip filter does not fire.
-	dataByURL := map[string]pipeline.HighlightData{
-		survivors[0].Ref.URL: {IssueURL: survivors[0].Ref.URL, UpdateTexts: []string{"comment body"}},
-		survivors[1].Ref.URL: {IssueURL: survivors[1].Ref.URL, UpdateTexts: []string{"comment body"}},
+	// Provide non-empty RecentComments so the AI-skip filter does not fire.
+	dataByURL := map[string]pipeline.NarrativeItem{
+		survivors[0].Ref.URL: {URL: survivors[0].Ref.URL, RecentComments: []pipeline.NarrativeComment{{Body: "comment body"}}},
+		survivors[1].Ref.URL: {URL: survivors[1].Ref.URL, RecentComments: []pipeline.NarrativeComment{{Body: "comment body"}}},
 	}
 	highlights := aiMapHighlights(context.Background(), fake, survivors, dataByURL, 2, quietCfg(2), testLogger())
 

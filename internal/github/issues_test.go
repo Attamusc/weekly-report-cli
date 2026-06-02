@@ -342,3 +342,178 @@ func TestFetchCommentsSince_NoComments(t *testing.T) {
 		t.Errorf("expected 0 comments, got %d", len(comments))
 	}
 }
+
+func TestFetchTimelineSince_FiltersByEventType(t *testing.T) {
+	since := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
+	closedAt := time.Date(2025, 7, 10, 12, 0, 0, 0, time.UTC)
+	labeledAt := time.Date(2025, 7, 11, 12, 0, 0, 0, time.UTC)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/owner/repo/issues/123/timeline" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		closedUser := &github.User{Login: github.String("bob")}
+		labeledUser := &github.User{Login: github.String("alice")}
+
+		events := []*github.Timeline{
+			{
+				Event:     github.String("closed"),
+				Actor:     closedUser,
+				CreatedAt: &github.Timestamp{Time: closedAt},
+			},
+			{
+				Event:     github.String("labeled"), // should be filtered out
+				Actor:     labeledUser,
+				CreatedAt: &github.Timestamp{Time: labeledAt},
+			},
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(events)
+	}))
+	defer server.Close()
+
+	client := github.NewClient(server.Client())
+	baseURL, _ := url.Parse(server.URL + "/")
+	client.BaseURL = baseURL
+
+	ref := input.IssueRef{Owner: "owner", Repo: "repo", Number: 123, URL: "https://github.com/owner/repo/issues/123"}
+
+	events, err := FetchTimelineSince(context.Background(), client, ref, since)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (labeled filtered), got %d", len(events))
+	}
+	if events[0].Type != "closed" {
+		t.Errorf("expected event type 'closed', got %q", events[0].Type)
+	}
+	if events[0].Actor != "bob" {
+		t.Errorf("expected actor 'bob', got %q", events[0].Actor)
+	}
+}
+
+func TestFetchTimelineSince_EmptyTimeline(t *testing.T) {
+	since := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]*github.Timeline{})
+	}))
+	defer server.Close()
+
+	client := github.NewClient(server.Client())
+	baseURL, _ := url.Parse(server.URL + "/")
+	client.BaseURL = baseURL
+
+	ref := input.IssueRef{Owner: "owner", Repo: "repo", Number: 1, URL: "https://github.com/owner/repo/issues/1"}
+
+	events, err := FetchTimelineSince(context.Background(), client, ref, since)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("expected 0 events, got %d", len(events))
+	}
+}
+
+func TestFetchTimelineSince_AllFiltered(t *testing.T) {
+	since := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
+	at := time.Date(2025, 7, 5, 12, 0, 0, 0, time.UTC)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		events := []*github.Timeline{
+			{Event: github.String("labeled"), CreatedAt: &github.Timestamp{Time: at}},
+			{Event: github.String("unlabeled"), CreatedAt: &github.Timestamp{Time: at}},
+			{Event: github.String("subscribed"), CreatedAt: &github.Timestamp{Time: at}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(events)
+	}))
+	defer server.Close()
+
+	client := github.NewClient(server.Client())
+	baseURL, _ := url.Parse(server.URL + "/")
+	client.BaseURL = baseURL
+
+	ref := input.IssueRef{Owner: "owner", Repo: "repo", Number: 1, URL: "https://github.com/owner/repo/issues/1"}
+
+	events, err := FetchTimelineSince(context.Background(), client, ref, since)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("expected 0 events after filtering all noisy types, got %d", len(events))
+	}
+}
+
+func TestFetchPullRequest_Merged(t *testing.T) {
+	mergedAt := time.Date(2025, 7, 10, 15, 0, 0, 0, time.UTC)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/owner/repo/pulls/42" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		pr := github.PullRequest{
+			MergedAt: &github.Timestamp{Time: mergedAt},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(pr)
+	}))
+	defer server.Close()
+
+	client := github.NewClient(server.Client())
+	baseURL, _ := url.Parse(server.URL + "/")
+	client.BaseURL = baseURL
+
+	ref := input.IssueRef{Owner: "owner", Repo: "repo", Number: 42, URL: "https://github.com/owner/repo/pull/42"}
+
+	data, err := FetchPullRequest(context.Background(), client, ref)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if data == nil {
+		t.Fatal("expected non-nil PullRequestData")
+	}
+	if data.MergedAt == nil {
+		t.Fatal("expected MergedAt to be set")
+	}
+	if !data.MergedAt.Equal(mergedAt) {
+		t.Errorf("expected MergedAt %v, got %v", mergedAt, *data.MergedAt)
+	}
+}
+
+func TestFetchPullRequest_NotMerged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pr := github.PullRequest{
+			State: github.String("open"),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(pr)
+	}))
+	defer server.Close()
+
+	client := github.NewClient(server.Client())
+	baseURL, _ := url.Parse(server.URL + "/")
+	client.BaseURL = baseURL
+
+	ref := input.IssueRef{Owner: "owner", Repo: "repo", Number: 1, URL: "https://github.com/owner/repo/pull/1"}
+
+	data, err := FetchPullRequest(context.Background(), client, ref)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if data == nil {
+		t.Fatal("expected non-nil PullRequestData")
+	}
+	if data.MergedAt != nil {
+		t.Errorf("expected MergedAt nil for unmerged PR, got %v", data.MergedAt)
+	}
+}

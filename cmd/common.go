@@ -173,6 +173,16 @@ func (f *githubFetcher) FetchCommentsSince(ctx context.Context, ref input.IssueR
 	return github.FetchCommentsSince(ctx, f.client, ref, since)
 }
 
+// FetchTimelineSince implements pipeline.IssueFetcher.
+func (f *githubFetcher) FetchTimelineSince(ctx context.Context, ref input.IssueRef, since time.Time) ([]github.TimelineEvent, error) {
+	return github.FetchTimelineSince(ctx, f.client, ref, since)
+}
+
+// FetchPullRequest implements pipeline.IssueFetcher.
+func (f *githubFetcher) FetchPullRequest(ctx context.Context, ref input.IssueRef) (*github.PullRequestData, error) {
+	return github.FetchPullRequest(ctx, f.client, ref)
+}
+
 // initSummarizer creates the appropriate AI summarizer based on configuration
 func initSummarizer(cfg *config.Config, logger *slog.Logger) ai.Summarizer {
 	if cfg.Models.Enabled {

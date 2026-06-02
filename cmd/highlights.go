@@ -185,13 +185,13 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	}
 
 	logger.Info("Hydrating survivors", "concurrency", cfg.Concurrency, "items", len(survivorRefs))
-	hydratedData := collectHighlightDataParallel(ctx, fetcher, survivorRefs, cfg, since, logger)
-	logger.Info("Hydration complete", "hydrated", len(hydratedData))
+	hydratedItems := collectNarrativeItemsParallel(ctx, fetcher, survivorRefs, cfg, since, logger)
+	logger.Info("Hydration complete", "hydrated", len(hydratedItems))
 
-	// Build a lookup map from URL → HighlightData for the map step.
-	dataByURL := make(map[string]pipeline.HighlightData, len(hydratedData))
-	for _, d := range hydratedData {
-		dataByURL[d.IssueURL] = d
+	// Build a lookup map from URL → NarrativeItem for the map step.
+	dataByURL := make(map[string]pipeline.NarrativeItem, len(hydratedItems))
+	for _, d := range hydratedItems {
+		dataByURL[d.URL] = d
 	}
 
 	// ========== PHASE E: AI map-reduce ==========
@@ -229,7 +229,7 @@ func aiMapHighlights(
 	ctx context.Context,
 	summarizer ai.Summarizer,
 	survivors []rollup.ScoredItem,
-	dataByURL map[string]pipeline.HighlightData,
+	dataByURL map[string]pipeline.NarrativeItem,
 	aiConcurrency int,
 	cfg *config.Config,
 	logger *slog.Logger,
@@ -301,8 +301,9 @@ func aiMapHighlights(
 }
 
 // scoredItemToHighlightItem builds an ai.HighlightItem from a scored rollup
-// item, enriching with hydrated data when available.
-func scoredItemToHighlightItem(scored rollup.ScoredItem, dataByURL map[string]pipeline.HighlightData) ai.HighlightItem {
+// item, enriching with hydrated NarrativeItem data when available.
+// TODO(TODO-narrative-2): delete when AI layer is rewritten to accept NarrativeItem directly.
+func scoredItemToHighlightItem(scored rollup.ScoredItem, dataByURL map[string]pipeline.NarrativeItem) ai.HighlightItem {
 	ref := scored.Ref
 	item := ai.HighlightItem{
 		IssueURL:   ref.URL,
@@ -311,19 +312,36 @@ func scoredItemToHighlightItem(scored rollup.ScoredItem, dataByURL map[string]pi
 		IsPR:       ref.IsPR,
 		Labels:     scored.Labels,
 	}
-	if d, ok := dataByURL[ref.URL]; ok {
-		item.UpdateTexts = d.UpdateTexts
+	if n, ok := dataByURL[ref.URL]; ok {
+		item.UpdateTexts = narrativeItemToUpdateTexts(n)
 		if item.IssueTitle == "" {
-			item.IssueTitle = d.IssueTitle
+			item.IssueTitle = n.Title
 		}
 		if item.IssueState == "" {
-			item.IssueState = d.IssueState
+			item.IssueState = n.State
 		}
 		if len(item.Labels) == 0 {
-			item.Labels = d.Labels
+			item.Labels = n.Labels
 		}
 	}
 	return item
+}
+
+// narrativeItemToUpdateTexts flattens a NarrativeItem back to the []string
+// update-text shape expected by the legacy AI call. Body is prepended if
+// non-empty; comment bodies follow (attribution dropped).
+// TODO(TODO-narrative-2): delete when AI layer is rewritten.
+func narrativeItemToUpdateTexts(n pipeline.NarrativeItem) []string {
+	var texts []string
+	if n.Body != "" {
+		texts = append(texts, n.Body)
+	}
+	for _, c := range n.RecentComments {
+		if c.Body != "" {
+			texts = append(texts, c.Body)
+		}
+	}
+	return texts
 }
 
 // defaultTheme is the fallback theme name when an item has no labels.
@@ -356,9 +374,9 @@ func parseUsers(raw string) []string {
 	return users
 }
 
-// collectHighlightDataParallel fetches lightweight highlight data in parallel.
-func collectHighlightDataParallel(ctx context.Context, fetcher pipeline.IssueFetcher, refs []input.IssueRef, cfg *config.Config, since time.Time, logger *slog.Logger) []pipeline.HighlightData {
-	dataResults := make(chan pipeline.HighlightDataResult, len(refs))
+// collectNarrativeItemsParallel fetches rich Tier-2 NarrativeItem data in parallel.
+func collectNarrativeItemsParallel(ctx context.Context, fetcher pipeline.IssueFetcher, refs []input.IssueRef, cfg *config.Config, since time.Time, logger *slog.Logger) []pipeline.NarrativeItem {
+	resultCh := make(chan pipeline.NarrativeItemResult, len(refs))
 	semaphore := make(chan struct{}, cfg.Concurrency)
 
 	var completed atomic.Int32
@@ -371,7 +389,7 @@ func collectHighlightDataParallel(ctx context.Context, fetcher pipeline.IssueFet
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
-			data, err := pipeline.CollectHighlightData(ctx, fetcher, ref, since)
+			item, err := pipeline.CollectNarrativeItem(ctx, fetcher, ref, since)
 
 			current := completed.Add(1)
 			if !cfg.Quiet {
@@ -381,23 +399,23 @@ func collectHighlightDataParallel(ctx context.Context, fetcher pipeline.IssueFet
 					"url", ref.URL)
 			}
 
-			dataResults <- pipeline.HighlightDataResult{Data: data, Err: err}
+			resultCh <- pipeline.NarrativeItemResult{Data: item, Err: err}
 		}(ref)
 	}
 
 	go func() {
 		wg.Wait()
-		close(dataResults)
+		close(resultCh)
 	}()
 
-	var allData []pipeline.HighlightData
-	for result := range dataResults {
+	var items []pipeline.NarrativeItem
+	for result := range resultCh {
 		if result.Err != nil {
-			logger.Debug("Error collecting highlight data", "error", result.Err)
+			logger.Debug("Error collecting narrative item", "error", result.Err)
 			continue
 		}
-		allData = append(allData, result.Data)
+		items = append(items, result.Data)
 	}
 
-	return allData
+	return items
 }

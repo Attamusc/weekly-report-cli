@@ -112,7 +112,7 @@ func fetchCloseReason(ctx context.Context, client *github.Client, ref input.Issu
 	// Look for the most recent "closed" event (iterate backwards)
 	for i := len(events) - 1; i >= 0; i-- {
 		event := events[i]
-		if event.GetEvent() != "closed" || event.GetCommitID() != "" {
+		if event.GetEvent() != StateClosed || event.GetCommitID() != "" {
 			continue
 		}
 
@@ -233,6 +233,143 @@ func FetchCommentsSince(ctx context.Context, client *github.Client, ref input.Is
 
 	logger.Debug("Comments fetch completed", "issue", ref.String(), "total", len(allComments))
 	return allComments, nil
+}
+
+// TimelineEvent is a filtered, high-signal event from an issue/PR timeline.
+type TimelineEvent struct {
+	Type   string    // event type string from GitHub API
+	Actor  string    // username of the actor
+	At     time.Time // when the event occurred
+	Detail string    // event-specific context text
+}
+
+// PullRequestData holds minimal PR metadata needed by NarrativeItem.
+type PullRequestData struct {
+	MergedAt *time.Time
+}
+
+// allowedTimelineEvents is the whitelist of high-signal event types to keep.
+// "reviewed" is the go-github name for pull_request_review events.
+var allowedTimelineEvents = map[string]bool{
+	StateClosed:        true,
+	"merged":           true,
+	"reopened":         true,
+	"review_requested": true,
+	"review_dismissed": true,
+	"reviewed":         true, // GitHub API name for pull_request_review
+	"referenced":       true,
+	"cross-referenced": true,
+	"assigned":         true, // filtered further below (assignee != author)
+	"marked_as_draft":  true,
+	"ready_for_review": true,
+}
+
+// FetchTimelineSince fetches timeline events for an issue/PR since the given
+// time, filtered to high-signal event types only. Returns events in
+// chronological order.
+func FetchTimelineSince(ctx context.Context, client *github.Client, ref input.IssueRef, since time.Time) ([]TimelineEvent, error) {
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
+	if !ok {
+		logger = slog.Default()
+	}
+
+	logger.Debug("Fetching timeline", "issue", ref.String(), "since", since.Format("2006-01-02"))
+
+	opts := &github.ListOptions{Page: 1, PerPage: 100}
+	var result []TimelineEvent
+
+	for {
+		events, resp, err := client.Issues.ListIssueTimeline(ctx, ref.Owner, ref.Repo, ref.Number, opts)
+		if err != nil {
+			if enhancedErr := enhanceGitHubError(err, ref); enhancedErr != nil {
+				return nil, enhancedErr
+			}
+			return nil, fmt.Errorf("failed to fetch timeline for %s: %w", ref.String(), err)
+		}
+
+		for _, e := range events {
+			at := e.GetCreatedAt().Time
+			if e.GetSubmittedAt().Time != (time.Time{}) {
+				at = e.GetSubmittedAt().Time
+			}
+			if !at.IsZero() && at.Before(since) {
+				continue
+			}
+
+			eventType := e.GetEvent()
+			if !allowedTimelineEvents[eventType] {
+				logger.Debug("Dropping timeline event", "type", eventType, "issue", ref.String())
+				continue
+			}
+
+			// For "assigned": skip when assignee == issue opener (noise).
+			if eventType == "assigned" {
+				assignee := ""
+				if e.GetAssignee() != nil {
+					assignee = e.GetAssignee().GetLogin()
+				}
+				if assignee == ref.AuthorLogin {
+					continue
+				}
+			}
+
+			actor := ""
+			if e.GetActor() != nil {
+				actor = e.GetActor().GetLogin()
+			}
+
+			detail := ""
+			switch eventType {
+			case "reviewed":
+				detail = e.GetState() // "approved", "changes_requested", "commented"
+			case "cross-referenced", "referenced":
+				if e.GetSource() != nil && e.GetSource().Issue != nil {
+					detail = e.GetSource().Issue.GetHTMLURL()
+				}
+			}
+
+			result = append(result, TimelineEvent{
+				Type:   eventType,
+				Actor:  actor,
+				At:     at,
+				Detail: detail,
+			})
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	logger.Debug("Timeline fetch complete", "issue", ref.String(), "events", len(result))
+	return result, nil
+}
+
+// FetchPullRequest fetches minimal PR metadata needed for NarrativeItem.
+// Only call this for IsPR == true items.
+func FetchPullRequest(ctx context.Context, client *github.Client, ref input.IssueRef) (*PullRequestData, error) {
+	logger, ok := ctx.Value(input.LoggerContextKey{}).(*slog.Logger)
+	if !ok {
+		logger = slog.Default()
+	}
+
+	logger.Debug("Fetching PR metadata", "pr", ref.String())
+
+	pr, _, err := client.PullRequests.Get(ctx, ref.Owner, ref.Repo, ref.Number)
+	if err != nil {
+		if enhancedErr := enhanceGitHubError(err, ref); enhancedErr != nil {
+			return nil, enhancedErr
+		}
+		return nil, fmt.Errorf("failed to fetch PR %s: %w", ref.String(), err)
+	}
+
+	data := &PullRequestData{}
+	if mergedAt := pr.GetMergedAt(); !mergedAt.Time.IsZero() {
+		t := mergedAt.Time
+		data.MergedAt = &t
+	}
+	return data, nil
 }
 
 // enhanceGitHubError checks for common GitHub API error conditions and provides helpful error messages

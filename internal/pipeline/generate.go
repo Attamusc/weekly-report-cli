@@ -18,6 +18,8 @@ import (
 type IssueFetcher interface {
 	FetchIssue(ctx context.Context, ref input.IssueRef) (github.IssueData, error)
 	FetchCommentsSince(ctx context.Context, ref input.IssueRef, since time.Time) ([]github.Comment, error)
+	FetchTimelineSince(ctx context.Context, ref input.IssueRef, since time.Time) ([]github.TimelineEvent, error)
+	FetchPullRequest(ctx context.Context, ref input.IssueRef) (*github.PullRequestData, error)
 }
 
 // CollectIssueData fetches GitHub data and extracts reports without AI summarization.
