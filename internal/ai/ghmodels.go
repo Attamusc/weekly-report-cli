@@ -8,12 +8,15 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Attamusc/weekly-report-cli/internal/input"
+	"github.com/Attamusc/weekly-report-cli/internal/narrative"
 	"github.com/Attamusc/weekly-report-cli/internal/retry"
+	"github.com/Attamusc/weekly-report-cli/internal/rollup"
 )
 
 // GHModelsClient implements Summarizer using GitHub Models API
@@ -62,6 +65,14 @@ type chatCompletionRequest struct {
 	Model       string    `json:"model"`
 	Messages    []message `json:"messages"`
 	Temperature float64   `json:"temperature"`
+}
+
+// chatCompletionRequestJSON is like chatCompletionRequest but includes response_format.
+type chatCompletionRequestJSON struct {
+	Model          string            `json:"model"`
+	Messages       []message         `json:"messages"`
+	Temperature    float64           `json:"temperature"`
+	ResponseFormat map[string]string `json:"response_format"`
 }
 
 type message struct {
@@ -175,32 +186,10 @@ Do NOT list every item. Be concise and executive-level.
 
 Respond with ONLY the paragraph text, no formatting, no prefatory text.`
 
-	singleHighlightSystemPrompt = `You are evaluating a single engineering item to determine if it is worth highlighting.
-
-You will receive a JSON object for one issue or pull request with: id, title, state, is_pr, labels, and recent updates.
-
-Decide if this item is worth highlighting — bug fixes shipped, support issues resolved,
-meaningful infrastructure improvements, important discussions, developer experience wins.
-Skip trivial/routine items, dependabot bumps, and minor chores.
-
-If worth highlighting:
-- ASSIGN a theme from: "Bug Fixes", "Support & Reliability", "Infrastructure", "Developer Experience",
-  "Documentation", "Security", "Performance", or a short custom theme if none fit.
-- WRITE a 1-sentence highlight — concise, specific, present tense.
-
-Return ONE JSON object with exactly two keys: "theme" and "summary".
-Do NOT wrap the object in an array.
-Example: {"theme": "Bug Fixes", "summary": "Fixes intermittent auth timeout affecting login."}
-
-If the item is NOT worth highlighting, return: {"theme": "", "summary": ""}`
-
 	temperature  = 1 // gpt-5o-mini only supports temperature of 1
 	maxRetries   = 3
 	baseDelay    = 1 * time.Second
 	maxBatchSize = 25 // Maximum items per batch (count cap)
-	// maxSingleHighlightChars is the character budget for UpdateTexts in a single
-	// SummarizeHighlight request. One item per call, so token pressure is low.
-	maxSingleHighlightChars = 3000
 )
 
 // getSystemPrompt returns the configured system prompt or the default if empty
@@ -324,6 +313,16 @@ func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string, systemP
 
 // makeHTTPRequest performs the actual HTTP request
 func (c *GHModelsClient) makeHTTPRequest(ctx context.Context, request chatCompletionRequest) (*chatCompletionResponse, error) {
+	return c.doHTTPRequest(ctx, request)
+}
+
+// makeHTTPRequestJSON performs the HTTP request for WriteNarrative (includes response_format).
+func (c *GHModelsClient) makeHTTPRequestJSON(ctx context.Context, request chatCompletionRequestJSON) (*chatCompletionResponse, error) {
+	return c.doHTTPRequest(ctx, request)
+}
+
+// doHTTPRequest marshals any request type and makes the POST call.
+func (c *GHModelsClient) doHTTPRequest(ctx context.Context, request any) (*chatCompletionResponse, error) {
 	requestBody, err := json.Marshal(request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -774,209 +773,249 @@ func (c *GHModelsClient) GenerateHeader(ctx context.Context, items []HeaderItem)
 	return c.callAPI(ctx, string(jsonBytes), headerSystemPrompt)
 }
 
-// highlightRequestItem represents a single item in a SummarizeHighlight request.
-type highlightRequestItem struct {
-	ID      string   `json:"id"`
-	Title   string   `json:"title"`
-	State   string   `json:"state"`
-	IsPR    bool     `json:"is_pr"`
-	Labels  []string `json:"labels"`
-	Updates []string `json:"updates"`
+// ── WriteNarrative ───────────────────────────────────────────────────────────
+
+// narrativeInputItem is the compact JSON shape sent to the AI for each NarrativeItem.
+type narrativeInputItem struct {
+	URL            string                  `json:"url"`
+	Title          string                  `json:"title"`
+	Body           string                  `json:"body"`
+	State          string                  `json:"state"`
+	IsPR           bool                    `json:"isPR"`
+	Author         string                  `json:"author"`
+	Assignees      []string                `json:"assignees"`
+	Labels         []string                `json:"labels"`
+	OpenedAt       time.Time               `json:"openedAt"`
+	ClosedAt       *time.Time              `json:"closedAt,omitempty"`
+	MergedAt       *time.Time              `json:"mergedAt,omitempty"`
+	ClosedThisWeek bool                    `json:"closedThisWeek"`
+	MergedThisWeek bool                    `json:"mergedThisWeek"`
+	RecentComments []narrativeInputComment `json:"recentComments"`
+	Events         []narrativeInputEvent   `json:"events"`
 }
 
-// highlightSingleResponse is the expected response shape for SummarizeHighlight.
-type highlightSingleResponse struct {
-	Theme   string `json:"theme"`
-	Summary string `json:"summary"`
+type narrativeInputComment struct {
+	Author    string    `json:"author"`
+	CreatedAt time.Time `json:"createdAt"`
+	Body      string    `json:"body"`
 }
 
-// highlightMergeItem is one entry in the MergeThemes request payload.
-type highlightMergeItem struct {
-	URL     string `json:"url"`
-	Title   string `json:"title"`
-	Theme   string `json:"theme"`
-	Summary string `json:"summary"`
+type narrativeInputEvent struct {
+	Type   string    `json:"type"`
+	Actor  string    `json:"actor"`
+	At     time.Time `json:"at"`
+	Detail string    `json:"detail,omitempty"`
 }
 
-// highlightMergeResponseItem is one entry in the MergeThemes response.
-type highlightMergeResponseItem struct {
-	URL   string `json:"url"`
-	Theme string `json:"theme"`
+// narrativeResponse is the expected JSON shape from the AI.
+type narrativeResponse struct {
+	Sections []narrativeResponseSection `json:"sections"`
 }
 
-const mergeThemesSystemPrompt = `You are merging theme labels across a set of engineering highlights.
+type narrativeResponseSection struct {
+	Heading string `json:"heading"`
+	Body    string `json:"body"`
+}
 
-You will receive a JSON array where each item has: url, title, theme, summary.
+// citationRegex matches inline markdown links with github.com URLs.
+var citationRegex = regexp.MustCompile(`\[[^\]]+\]\((https://github\.com/[^)]+)\)`)
 
-Your job: rename and consolidate themes so they are consistent and minimal.
-Use themes from: "Bug Fixes", "Support & Reliability", "Infrastructure", "Developer Experience",
-"Documentation", "Security", "Performance", or a short custom theme if none fit.
+const narrativeSystemPrompt = `You are writing a weekly engineering narrative report.
 
-Return ONLY a JSON array of objects with exactly two fields: "url" and "theme".
-Do NOT include title, summary, or any other field.
-Example: [{"url":"https://...","theme":"Bug Fixes"}]`
+You will receive a JSON array of issues and pull requests from the past week.
+Each item includes: url, title, body, state, isPR, author, assignees, labels,
+openedAt, closedAt, mergedAt, closedThisWeek, mergedThisWeek, recentComments,
+and events.
 
-// truncateHighlightItem returns a copy of item with UpdateTexts trimmed so the
-// total UpdateTexts size fits within maxSingleHighlightChars. The most recent
-// updates are preserved.
-func truncateHighlightItem(item HighlightItem) HighlightItem {
-	out := item
-	out.UpdateTexts = nil
-	totalLen := 0
-	for i := len(item.UpdateTexts) - 1; i >= 0; i-- {
-		u := item.UpdateTexts[i]
-		if totalLen+len(u) > maxSingleHighlightChars {
-			if totalLen < maxSingleHighlightChars {
-				trunc := u[:maxSingleHighlightChars-totalLen]
-				out.UpdateTexts = append([]string{trunc + "…"}, out.UpdateTexts...)
+Write 3–5 thematic sections covering the most significant work.
+
+Section requirements:
+- Each section starts with ### <heading> then 1–2 paragraphs of prose (~80–150 words).
+- Use inline [text](url) citations linking to specific items.
+- Cover BOTH major initiatives AND notable day-to-day work.
+- Mention people by @username when their specific work warrants it.
+- SKIP routine work: entitlement adds, ownership cleanups, label-only changes, dependency bumps.
+- Be specific. Avoid generic phrases: "addresses", "ensures", "enhances",
+  "improves system reliability", "improves overall", "general improvements".
+- Total output: ≤ 600 words across all sections.
+
+Respond with ONLY a JSON object (no markdown fences):
+{"sections": [{"heading": "...", "body": "..."}]}`
+
+// rollupSummary builds a brief textual summary of rollup stats for use in the
+// narrative system prompt. It is intentionally lightweight: no full item data.
+func rollupSummary(r rollup.Rollup) string {
+	totalItems := len(r.AllSorted)
+	var dateRange string
+	if totalItems > 0 {
+		first := r.AllSorted[len(r.AllSorted)-1].Ref.UpdatedAt
+		last := r.AllSorted[0].Ref.UpdatedAt
+		dateRange = fmt.Sprintf("%s to %s", first.Format("2006-01-02"), last.Format("2006-01-02"))
+	}
+	type ac struct {
+		name string
+		n    int
+	}
+	var authors []ac
+	for a, items := range r.ByAuthor {
+		authors = append(authors, ac{a, len(items)})
+	}
+	for i := 0; i < len(authors)-1; i++ {
+		for j := i + 1; j < len(authors); j++ {
+			if authors[j].n > authors[i].n {
+				authors[i], authors[j] = authors[j], authors[i]
 			}
+		}
+	}
+	var top []string
+	for i, a := range authors {
+		if i >= 5 {
 			break
 		}
-		out.UpdateTexts = append([]string{u}, out.UpdateTexts...)
-		totalLen += len(u)
+		top = append(top, fmt.Sprintf("@%s (%d items)", a.name, a.n))
 	}
-	return out
+	return fmt.Sprintf("Total rollup items: %d. Date range: %s. Top contributors: %s.",
+		totalItems, dateRange, strings.Join(top, ", "))
 }
 
-// parseSingleHighlightResponse parses the raw JSON string from a SummarizeHighlight
-// API response. It accepts both shapes the model may return:
-//   - Preferred: {"theme": "...", "summary": "..."}
-//   - Acceptable: [{"theme": "...", "summary": "..."}] — single-element array, unwrapped.
-//
-// Any other shape is returned as an error so the caller's per-item fallback fires.
-func parseSingleHighlightResponse(raw string) (highlightSingleResponse, error) {
-	validate := func(r highlightSingleResponse) (highlightSingleResponse, error) {
-		if strings.TrimSpace(r.Summary) == "" {
-			return highlightSingleResponse{}, fmt.Errorf("empty summary in highlight response")
+func (c *GHModelsClient) callJSONAPI(ctx context.Context, request chatCompletionRequestJSON) (string, error) {
+	var rawResponse string
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := retry.CalculateBackoff(attempt-1, int(baseDelay.Milliseconds()))
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(backoff):
+			}
 		}
-		return r, nil
+		resp, err := c.makeHTTPRequestJSON(ctx, request)
+		if err != nil {
+			lastErr = err
+			if httpErr, ok := err.(*HTTPError); ok && httpErr.StatusCode == 429 {
+				if retryAfter := httpErr.Headers.Get("Retry-After"); retryAfter != "" {
+					if seconds, parseErr := strconv.Atoi(retryAfter); parseErr == nil {
+						select {
+						case <-ctx.Done():
+							return "", ctx.Err()
+						case <-time.After(time.Duration(seconds) * time.Second):
+						}
+					}
+				}
+				continue
+			}
+			return "", fmt.Errorf("WriteNarrative API request failed: %w", err)
+		}
+		if len(resp.Choices) == 0 {
+			return "", fmt.Errorf("WriteNarrative: empty response")
+		}
+		rawResponse = resp.Choices[0].Message.Content
+		break
 	}
-
-	// Try object first (preferred shape).
-	var single highlightSingleResponse
-	if err := json.Unmarshal([]byte(raw), &single); err == nil {
-		return validate(single)
+	if rawResponse == "" && lastErr != nil {
+		return "", fmt.Errorf("WriteNarrative failed after %d retries: %w", maxRetries, lastErr)
 	}
-
-	// Try single-element array (model wrapped the object in [])
-	var arr []highlightSingleResponse
-	if err := json.Unmarshal([]byte(raw), &arr); err == nil && len(arr) == 1 {
-		return validate(arr[0])
-	}
-
-	return highlightSingleResponse{}, fmt.Errorf("expected JSON object or single-element array, got: %s", raw)
+	return rawResponse, nil
 }
 
-// SummarizeHighlight curates a single item and returns a Highlight with theme and summary.
-func (c *GHModelsClient) SummarizeHighlight(ctx context.Context, item HighlightItem) (Highlight, error) {
-	logger := getContextLogger(ctx)
-	logger.Debug("AI summarize highlight", "model", c.Model, "url", item.IssueURL)
-
-	// Apply per-item safety cap on UpdateTexts.
-	item = truncateHighlightItem(item)
-
-	reqItem := highlightRequestItem{
-		ID:      item.IssueURL,
-		Title:   item.IssueTitle,
-		State:   item.IssueState,
-		IsPR:    item.IsPR,
-		Labels:  item.Labels,
-		Updates: item.UpdateTexts,
-	}
-	jsonBytes, err := json.Marshal(reqItem)
-	if err != nil {
-		return Highlight{}, fmt.Errorf("failed to marshal highlight item: %w", err)
-	}
-
-	// Use the system prompt override if provided, otherwise use the single-item
-	// system prompt (singleHighlightSystemPrompt) which asks for one JSON object.
-	sysPrompt := singleHighlightSystemPrompt
-	if c.SystemPrompt != "" {
-		sysPrompt = c.SystemPrompt
-	}
-
-	response, err := c.callAPI(ctx, string(jsonBytes), sysPrompt)
-	if err != nil {
-		return Highlight{}, fmt.Errorf("highlight API call failed: %w", err)
-	}
-
-	// Strip markdown code fences.
-	response = strings.TrimSpace(response)
-	response = strings.TrimPrefix(response, "```json")
-	response = strings.TrimPrefix(response, "```")
-	response = strings.TrimSuffix(response, "```")
-	response = strings.TrimSpace(response)
-
-	resp, err := parseSingleHighlightResponse(response)
-	if err != nil {
-		return Highlight{}, fmt.Errorf("failed to parse highlight response: %w", err)
-	}
-
-	return Highlight{
-		Theme:   resp.Theme,
-		Title:   item.IssueTitle,
-		URL:     item.IssueURL,
-		Summary: resp.Summary,
-	}, nil
-}
-
-// MergeThemes renames and merges themes across a set of highlights. Only the
-// Theme field is overwritten; Title, URL, and Summary are sourced from the input
-// slice and are never read from the AI response (premortem #5).
-// If the response is malformed or empty, the input is returned unchanged.
-func (c *GHModelsClient) MergeThemes(ctx context.Context, in []Highlight) ([]Highlight, error) {
+// WriteNarrative produces a structured narrative report from rich NarrativeItem data.
+// Thin items (no body, no comments, no events) are excluded from the AI prompt.
+// On AI error or unparseable response, returns Narrative{} and an error.
+func (c *GHModelsClient) WriteNarrative(ctx context.Context, items []narrative.Item, r rollup.Rollup) (Narrative, error) {
 	logger := getContextLogger(ctx)
 
-	if len(in) == 0 {
-		return in, nil
+	// ── Thin-input filter (premortem #7) ──
+	var filtered []narrative.Item
+	for _, it := range items {
+		if strings.TrimSpace(it.Body) == "" && len(it.RecentComments) == 0 && len(it.Events) == 0 {
+			logger.Debug("Excluding thin-input item from narrative", "url", it.URL)
+			continue
+		}
+		filtered = append(filtered, it)
+	}
+	if len(filtered) == 0 {
+		logger.Info("All narrative items excluded as thin-input; skipping AI call")
+		return Narrative{}, nil
 	}
 
-	mergeItems := make([]highlightMergeItem, len(in))
-	for i, h := range in {
-		mergeItems[i] = highlightMergeItem{
-			URL:     h.URL,
-			Title:   h.Title,
-			Theme:   h.Theme,
-			Summary: h.Summary,
+	// ── Build URL set for citation verification ──
+	inputURLs := make(map[string]bool, len(filtered))
+	for _, it := range filtered {
+		inputURLs[it.URL] = true
+	}
+
+	// ── Build compact JSON input ──
+	inputItems := make([]narrativeInputItem, len(filtered))
+	for i, it := range filtered {
+		comments := make([]narrativeInputComment, len(it.RecentComments))
+		for j, c := range it.RecentComments {
+			comments[j] = narrativeInputComment{Author: c.Author, CreatedAt: c.CreatedAt, Body: c.Body}
+		}
+		events := make([]narrativeInputEvent, len(it.Events))
+		for j, e := range it.Events {
+			events[j] = narrativeInputEvent{Type: e.Type, Actor: e.Actor, At: e.At, Detail: e.Detail}
+		}
+		inputItems[i] = narrativeInputItem{
+			URL: it.URL, Title: it.Title, Body: it.Body,
+			State: it.State, IsPR: it.IsPR, Author: it.Author,
+			Assignees: it.Assignees, Labels: it.Labels,
+			OpenedAt: it.OpenedAt, ClosedAt: it.ClosedAt, MergedAt: it.MergedAt,
+			ClosedThisWeek: it.ClosedThisWeek, MergedThisWeek: it.MergedThisWeek,
+			RecentComments: comments, Events: events,
 		}
 	}
-	jsonBytes, err := json.Marshal(mergeItems)
+
+	// ── Build rollup context for system prompt ──
+	promptContext := fmt.Sprintf("Context from mechanical rollup:\n%s\n\nItems to narrate (%d):\n", rollupSummary(r), len(filtered))
+
+	itemBytes, err := json.Marshal(inputItems)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal merge themes request: %w", err)
+		return Narrative{}, fmt.Errorf("failed to marshal narrative items: %w", err)
+	}
+	userPrompt := promptContext + string(itemBytes)
+
+	logger.Debug("WriteNarrative AI call", "model", c.Model, "items", len(filtered))
+
+	// ── Make API call with JSON response format ──
+	request := chatCompletionRequestJSON{
+		Model:          c.Model,
+		Temperature:    temperature,
+		ResponseFormat: map[string]string{"type": "json_object"},
+		Messages: []message{
+			{Role: "system", Content: narrativeSystemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
 	}
 
-	response, err := c.callAPI(ctx, string(jsonBytes), mergeThemesSystemPrompt)
+	rawResponse, err := c.callJSONAPI(ctx, request)
 	if err != nil {
-		return nil, fmt.Errorf("merge themes API call failed: %w", err)
+		return Narrative{}, err
 	}
 
-	// Strip markdown code fences.
-	response = strings.TrimSpace(response)
-	response = strings.TrimPrefix(response, "```json")
-	response = strings.TrimPrefix(response, "```")
-	response = strings.TrimSuffix(response, "```")
-	response = strings.TrimSpace(response)
-
-	var respItems []highlightMergeResponseItem
-	if err := json.Unmarshal([]byte(response), &respItems); err != nil || len(respItems) == 0 {
-		logger.Warn("MergeThemes response malformed or empty; returning input unchanged",
-			"error", err, "response", response)
-		return in, nil
+	// ── Parse response ──
+	var nr narrativeResponse
+	if err := json.Unmarshal([]byte(rawResponse), &nr); err != nil {
+		return Narrative{}, fmt.Errorf("WriteNarrative: failed to parse response: %w", err)
 	}
 
-	// Build url → new theme map. Only Theme is read from the response.
-	themeByURL := make(map[string]string, len(respItems))
-	for _, ri := range respItems {
-		themeByURL[ri.URL] = ri.Theme
-	}
-
-	// Walk input, overwriting only Theme.
-	out := make([]Highlight, len(in))
-	for i, h := range in {
-		out[i] = h
-		if newTheme, ok := themeByURL[h.URL]; ok && newTheme != "" {
-			out[i].Theme = newTheme
+	// ── Citation verification (premortem #1) ──
+	unknownCount := 0
+	for _, sec := range nr.Sections {
+		matches := citationRegex.FindAllStringSubmatch(sec.Body, -1)
+		for _, m := range matches {
+			url := m[1]
+			if !inputURLs[url] {
+				logger.Warn("Narrative contains unknown citation URL", "unknown_citation_url", url)
+				unknownCount++
+			}
 		}
 	}
-	return out, nil
+	logger.Info("Narrative citation verification complete", "unknown_citations", unknownCount)
+
+	sections := make([]NarrativeSection, len(nr.Sections))
+	for i, s := range nr.Sections {
+		sections[i] = NarrativeSection(s)
+	}
+	return Narrative{Sections: sections}, nil
 }

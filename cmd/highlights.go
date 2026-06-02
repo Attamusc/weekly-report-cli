@@ -18,6 +18,7 @@ import (
 	"github.com/Attamusc/weekly-report-cli/internal/format"
 	"github.com/Attamusc/weekly-report-cli/internal/github"
 	"github.com/Attamusc/weekly-report-cli/internal/input"
+	"github.com/Attamusc/weekly-report-cli/internal/narrative"
 	"github.com/Attamusc/weekly-report-cli/internal/pipeline"
 	"github.com/Attamusc/weekly-report-cli/internal/rollup"
 )
@@ -188,30 +189,28 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	hydratedItems := collectNarrativeItemsParallel(ctx, fetcher, survivorRefs, cfg, since, logger)
 	logger.Info("Hydration complete", "hydrated", len(hydratedItems))
 
-	// Build a lookup map from URL → NarrativeItem for the map step.
-	dataByURL := make(map[string]pipeline.NarrativeItem, len(hydratedItems))
-	for _, d := range hydratedItems {
-		dataByURL[d.URL] = d
-	}
+	// ========== PHASE E: AI narrative call ==========
+	narrativeItems := pipelineToNarrativeItems(hydratedItems)
 
-	// ========== PHASE E: AI map-reduce ==========
-	logger.Info("Starting AI map step", "survivors", len(survivors), "ai_concurrency", highlightsAIConcurrency)
-
-	highlights := aiMapHighlights(ctx, summarizer, survivors, dataByURL, highlightsAIConcurrency, cfg, logger)
-
-	logger.Info("AI map complete", "highlights", len(highlights))
-
-	logger.Info("Starting AI reduce step")
-	merged, err := summarizer.MergeThemes(ctx, highlights)
+	logger.Info("Starting narrative AI call", "items", len(narrativeItems))
+	narr, err := summarizer.WriteNarrative(ctx, narrativeItems, r)
 	if err != nil {
-		logger.Warn("MergeThemes failed, using pre-merge highlights", "error", err)
-		merged = highlights
-	} else {
-		logger.Info("AI reduce complete")
+		logger.Warn("Narrative AI call failed; rendering rollup only", "error", err)
+		narr = ai.Narrative{}
 	}
 
 	// ========== PHASE F: Render ==========
-	output := format.RenderHighlights(merged)
+	// TODO(TODO-f0ba083f): replace with RenderNarrativeReport once Phase 3 lands.
+	// For now, build a placeholder []ai.Highlight from narrative sections so the
+	// existing RenderHighlights can produce some output.
+	var highlights []ai.Highlight
+	for _, sec := range narr.Sections {
+		highlights = append(highlights, ai.Highlight{
+			Theme:   sec.Heading,
+			Summary: sec.Body,
+		})
+	}
+	output := format.RenderHighlights(highlights)
 	if output == "" {
 		if !cfg.Quiet {
 			fmt.Fprintln(os.Stderr, "No notable highlights found.")
@@ -222,144 +221,29 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// aiMapHighlights runs one SummarizeHighlight call per survivor, bounded by
-// aiConcurrency. Per-item errors are logged as warnings; the item falls back
-// to a label-derived Highlight so partial results are always returned.
-func aiMapHighlights(
-	ctx context.Context,
-	summarizer ai.Summarizer,
-	survivors []rollup.ScoredItem,
-	dataByURL map[string]pipeline.NarrativeItem,
-	aiConcurrency int,
-	cfg *config.Config,
-	logger *slog.Logger,
-) []ai.Highlight {
-	type indexedResult struct {
-		index     int
-		highlight ai.Highlight
-	}
-
-	results := make(chan indexedResult, len(survivors))
-	semaphore := make(chan struct{}, aiConcurrency)
-
-	var completed atomic.Int32
-	var wg sync.WaitGroup
-
-	for i, s := range survivors {
-		wg.Add(1)
-		go func(idx int, scored rollup.ScoredItem) {
-			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			item := scoredItemToHighlightItem(scored, dataByURL)
-
-			var h ai.Highlight
-			if len(item.UpdateTexts) == 0 {
-				// No hydrated comment bodies — skip AI entirely and emit a
-				// deterministic highlight. The score formula can promote
-				// items with zero comments (closed PRs, etc.) that are
-				// real signal but give the AI nothing to summarize.
-				logger.Info("Skipping AI for empty-context item", "url", item.IssueURL)
-				h = fallbackHighlight(item)
-			} else {
-				start := time.Now()
-				var err error
-				h, err = summarizer.SummarizeHighlight(ctx, item)
-				elapsed := time.Since(start)
-
-				if cfg.Verbose {
-					logger.Debug("SummarizeHighlight", "url", item.IssueURL, "latency_ms", elapsed.Milliseconds())
-				}
-
-				if err != nil {
-					logger.Warn("SummarizeHighlight failed, using fallback", "url", item.IssueURL, "error", err)
-					h = fallbackHighlight(item)
-				}
-			}
-
-			current := completed.Add(1)
-			if !cfg.Quiet {
-				logger.Info("AI map progress", "completed", int(current), "total", len(survivors))
-			}
-
-			results <- indexedResult{index: idx, highlight: h}
-		}(i, s)
-	}
-
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	// Collect in original order.
-	ordered := make([]ai.Highlight, len(survivors))
-	for r := range results {
-		ordered[r.index] = r.highlight
-	}
-	return ordered
-}
-
-// scoredItemToHighlightItem builds an ai.HighlightItem from a scored rollup
-// item, enriching with hydrated NarrativeItem data when available.
-// TODO(TODO-narrative-2): delete when AI layer is rewritten to accept NarrativeItem directly.
-func scoredItemToHighlightItem(scored rollup.ScoredItem, dataByURL map[string]pipeline.NarrativeItem) ai.HighlightItem {
-	ref := scored.Ref
-	item := ai.HighlightItem{
-		IssueURL:   ref.URL,
-		IssueTitle: ref.Title,
-		IssueState: ref.State,
-		IsPR:       ref.IsPR,
-		Labels:     scored.Labels,
-	}
-	if n, ok := dataByURL[ref.URL]; ok {
-		item.UpdateTexts = narrativeItemToUpdateTexts(n)
-		if item.IssueTitle == "" {
-			item.IssueTitle = n.Title
+// pipelineToNarrativeItems converts []pipeline.NarrativeItem to []narrative.Item
+// for the AI layer, which lives in a separate package to avoid import cycles.
+func pipelineToNarrativeItems(src []pipeline.NarrativeItem) []narrative.Item {
+	out := make([]narrative.Item, len(src))
+	for i, s := range src {
+		comments := make([]narrative.Comment, len(s.RecentComments))
+		for j, c := range s.RecentComments {
+			comments[j] = narrative.Comment{Author: c.Author, CreatedAt: c.CreatedAt, Body: c.Body}
 		}
-		if item.IssueState == "" {
-			item.IssueState = n.State
+		events := make([]narrative.Event, len(s.Events))
+		for j, e := range s.Events {
+			events[j] = narrative.Event{Type: e.Type, Actor: e.Actor, At: e.At, Detail: e.Detail}
 		}
-		if len(item.Labels) == 0 {
-			item.Labels = n.Labels
+		out[i] = narrative.Item{
+			URL: s.URL, Title: s.Title, Body: s.Body,
+			State: s.State, IsPR: s.IsPR, Author: s.Author,
+			Assignees: s.Assignees, Labels: s.Labels,
+			OpenedAt: s.OpenedAt, ClosedAt: s.ClosedAt, MergedAt: s.MergedAt,
+			ClosedThisWeek: s.ClosedThisWeek, MergedThisWeek: s.MergedThisWeek,
+			RecentComments: comments, Events: events,
 		}
 	}
-	return item
-}
-
-// narrativeItemToUpdateTexts flattens a NarrativeItem back to the []string
-// update-text shape expected by the legacy AI call. Body is prepended if
-// non-empty; comment bodies follow (attribution dropped).
-// TODO(TODO-narrative-2): delete when AI layer is rewritten.
-func narrativeItemToUpdateTexts(n pipeline.NarrativeItem) []string {
-	var texts []string
-	if n.Body != "" {
-		texts = append(texts, n.Body)
-	}
-	for _, c := range n.RecentComments {
-		if c.Body != "" {
-			texts = append(texts, c.Body)
-		}
-	}
-	return texts
-}
-
-// defaultTheme is the fallback theme name when an item has no labels.
-const defaultTheme = "General"
-
-// fallbackHighlight builds a minimal Highlight from a HighlightItem when
-// SummarizeHighlight returns an error. Mirrors NoopSummarizer.SummarizeHighlight.
-func fallbackHighlight(item ai.HighlightItem) ai.Highlight {
-	theme := defaultTheme
-	if len(item.Labels) > 0 {
-		theme = item.Labels[0]
-	}
-	return ai.Highlight{
-		Theme:   theme,
-		Title:   item.IssueTitle,
-		URL:     item.IssueURL,
-		Summary: item.IssueTitle,
-	}
+	return out
 }
 
 // parseUsers splits a comma-separated user string into trimmed, non-empty handles.

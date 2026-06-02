@@ -4,11 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Attamusc/weekly-report-cli/internal/input"
+	"github.com/Attamusc/weekly-report-cli/internal/narrative"
+	"github.com/Attamusc/weekly-report-cli/internal/rollup"
 )
 
 func TestGHModelsClient_Summarize(t *testing.T) {
@@ -490,259 +495,187 @@ func TestGHModelsClient_GenerateHeader_Empty(t *testing.T) {
 	}
 }
 
-func TestGHModelsClient_SummarizeHighlight_Success(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), "Fix login bug") {
-			t.Errorf("request body missing expected title: %s", body)
-		}
-		resp := chatCompletionResponse{
-			Choices: []choice{{Message: message{Role: "assistant", Content: `{"theme":"Bug Fixes","summary":"Fixed the login bug."}`}}},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			t.Errorf("failed to encode response: %v", err)
-		}
-	}))
-	defer srv.Close()
-
-	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
-	item := HighlightItem{
-		IssueURL:   "https://github.com/org/repo/issues/1",
-		IssueTitle: "Fix login bug",
-		IssueState: "closed",
-		Labels:     []string{"bug"},
-	}
-	h, err := client.SummarizeHighlight(context.Background(), item)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if h.Theme != "Bug Fixes" {
-		t.Errorf("expected theme %q, got %q", "Bug Fixes", h.Theme)
-	}
-	if h.Summary != "Fixed the login bug." {
-		t.Errorf("expected summary %q, got %q", "Fixed the login bug.", h.Summary)
-	}
-	if h.Title != item.IssueTitle {
-		t.Errorf("expected title %q from input, got %q", item.IssueTitle, h.Title)
-	}
-	if h.URL != item.IssueURL {
-		t.Errorf("expected URL %q from input, got %q", item.IssueURL, h.URL)
+func makeTestNarrativeItems() []narrative.Item {
+	return []narrative.Item{
+		{
+			URL:      "https://github.com/org/repo/issues/1",
+			Title:    "Fix login bug",
+			Body:     "Users cannot log in.",
+			State:    "closed",
+			Author:   "alice",
+			OpenedAt: time.Now().Add(-48 * time.Hour),
+			RecentComments: []narrative.Comment{
+				{Author: "bob", CreatedAt: time.Now().Add(-24 * time.Hour), Body: "Fixed."},
+			},
+		},
+		{
+			URL:      "https://github.com/org/repo/pull/2",
+			Title:    "Add CI pipeline",
+			Body:     "Adds GitHub Actions workflow.",
+			State:    "closed",
+			IsPR:     true,
+			Author:   "carol",
+			OpenedAt: time.Now().Add(-72 * time.Hour),
+			RecentComments: []narrative.Comment{
+				{Author: "carol", CreatedAt: time.Now().Add(-12 * time.Hour), Body: "LGTM"},
+			},
+		},
 	}
 }
 
-func TestGHModelsClient_SummarizeHighlight_ArrayResponse(t *testing.T) {
+func makeTestRollup() rollup.Rollup {
+	return rollup.Rollup{
+		ByAuthor:  map[string][]rollup.ScoredItem{},
+		AllSorted: []rollup.ScoredItem{},
+	}
+}
+
+func TestGHModelsClient_WriteNarrative_Success(t *testing.T) {
+	narContent := `{"sections":[{"heading":"Bug Fixes","body":"Fixed [login bug](https://github.com/org/repo/issues/1)."}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Model wraps the object in an array — the 5/5 failure mode from A/B run.
-		resp := chatCompletionResponse{
-			Choices: []choice{{Message: message{Role: "assistant", Content: `[{"theme":"Infrastructure","summary":"Refactors CI pipeline to reduce build times."}]`}}},
-		}
 		w.Header().Set("Content-Type", "application/json")
+		resp := chatCompletionResponse{
+			Choices: []choice{{Message: message{Role: "assistant", Content: narContent}}},
+		}
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
 	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
-	item := HighlightItem{
-		IssueURL:   "https://github.com/org/repo/issues/5",
-		IssueTitle: "Refactor CI",
-		IssueState: "closed",
-	}
-	h, err := client.SummarizeHighlight(context.Background(), item)
+	narr, err := client.WriteNarrative(context.Background(), makeTestNarrativeItems(), makeTestRollup())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if h.Theme != "Infrastructure" {
-		t.Errorf("expected theme %q, got %q", "Infrastructure", h.Theme)
+	if len(narr.Sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(narr.Sections))
 	}
-	if h.Summary != "Refactors CI pipeline to reduce build times." {
-		t.Errorf("expected summary %q, got %q", "Refactors CI pipeline to reduce build times.", h.Summary)
-	}
-	if h.Title != item.IssueTitle {
-		t.Errorf("expected title %q from input, got %q", item.IssueTitle, h.Title)
-	}
-	if h.URL != item.IssueURL {
-		t.Errorf("expected URL %q from input, got %q", item.IssueURL, h.URL)
+	if narr.Sections[0].Heading != "Bug Fixes" {
+		t.Errorf("expected heading 'Bug Fixes', got %q", narr.Sections[0].Heading)
 	}
 }
 
-func TestGHModelsClient_SummarizeHighlight_MalformedResponse(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-	}{
-		{name: "plain string", content: `"just a string"`},
-		{name: "int array", content: `[1,2,3]`},
-		{name: "multi-element array", content: `[{"theme":"A","summary":"X"},{"theme":"B","summary":"Y"}]`},
-		{name: "empty summary", content: `{"theme":"Infrastructure","summary":""}`},
-		{name: "whitespace-only summary", content: `{"theme":"Infrastructure","summary":"   "}`},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				resp := chatCompletionResponse{
-					Choices: []choice{{Message: message{Role: "assistant", Content: tc.content}}},
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(resp)
-			}))
-			defer srv.Close()
-
-			client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
-			item := HighlightItem{
-				IssueURL:   "https://github.com/org/repo/issues/9",
-				IssueTitle: "Some issue",
-			}
-			_, err := client.SummarizeHighlight(context.Background(), item)
-			if err == nil {
-				t.Error("expected error for malformed response, got nil")
-			}
-		})
-	}
-}
-
-func TestGHModelsClient_SummarizeHighlight_Truncation(t *testing.T) {
-	var capturedBody []byte
+func TestGHModelsClient_WriteNarrative_AIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedBody, _ = io.ReadAll(r.Body)
-		resp := chatCompletionResponse{
-			Choices: []choice{{Message: message{Role: "assistant", Content: `{"theme":"General","summary":"ok"}`}}},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"server error"}`))
 	}))
 	defer srv.Close()
 
 	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
-	// Build UpdateTexts totalling well over 3000 chars.
-	longText := strings.Repeat("x", 2000)
-	item := HighlightItem{
-		IssueURL:    "https://github.com/org/repo/issues/2",
-		IssueTitle:  "Some issue",
-		UpdateTexts: []string{longText, longText, longText},
-	}
-	_, err := client.SummarizeHighlight(context.Background(), item)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// The request body contains the full chat completion JSON. The user content
-	// portion (UpdateTexts) must be bounded to ~maxSingleHighlightChars.
-	// We assert the total body is well under 3*2000 = 6000 chars of raw texts.
-	if len(capturedBody) >= 6000+500 {
-		t.Errorf("expected request body to be truncated; got %d bytes", len(capturedBody))
+	_, err := client.WriteNarrative(context.Background(), makeTestNarrativeItems(), makeTestRollup())
+	if err == nil {
+		t.Fatal("expected error for 500 response")
 	}
 }
 
-func TestGHModelsClient_MergeThemes_Success(t *testing.T) {
+func TestGHModelsClient_WriteNarrative_MalformedResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := chatCompletionResponse{
-			Choices: []choice{{Message: message{Role: "assistant", Content: `[{"url":"https://github.com/org/repo/issues/1","theme":"Infrastructure"},{"url":"https://github.com/org/repo/issues/2","theme":"Infrastructure"}]`}}},
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer srv.Close()
-
-	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
-	in := []Highlight{
-		{Theme: "Bug Fixes", Title: "Fix A", URL: "https://github.com/org/repo/issues/1", Summary: "summary A"},
-		{Theme: "Performance", Title: "Perf B", URL: "https://github.com/org/repo/issues/2", Summary: "summary B"},
-	}
-	out, err := client.MergeThemes(context.Background(), in)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(out) != 2 {
-		t.Fatalf("expected 2 highlights, got %d", len(out))
-	}
-	for i, h := range out {
-		if h.Theme != "Infrastructure" {
-			t.Errorf("[%d] expected theme %q, got %q", i, "Infrastructure", h.Theme)
-		}
-		// Title, URL, Summary must come from the input, not the response.
-		if h.Title != in[i].Title {
-			t.Errorf("[%d] title changed: want %q, got %q", i, in[i].Title, h.Title)
-		}
-		if h.URL != in[i].URL {
-			t.Errorf("[%d] URL changed: want %q, got %q", i, in[i].URL, h.URL)
-		}
-		if h.Summary != in[i].Summary {
-			t.Errorf("[%d] summary changed: want %q, got %q", i, in[i].Summary, h.Summary)
-		}
-	}
-}
-
-func TestGHModelsClient_MergeThemes_MalformedResponse(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := chatCompletionResponse{
 			Choices: []choice{{Message: message{Role: "assistant", Content: "not json at all"}}},
 		}
-		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
 	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
-	in := []Highlight{
-		{Theme: "Bug Fixes", Title: "Fix A", URL: "https://github.com/org/repo/issues/1", Summary: "summary A"},
-	}
-	out, err := client.MergeThemes(context.Background(), in)
-	if err != nil {
-		t.Fatalf("unexpected error on malformed response: %v", err)
-	}
-	// Must return input unchanged.
-	if len(out) != 1 || out[0].Theme != "Bug Fixes" {
-		t.Errorf("expected input unchanged, got %+v", out)
+	_, err := client.WriteNarrative(context.Background(), makeTestNarrativeItems(), makeTestRollup())
+	if err == nil {
+		t.Fatal("expected error for malformed response")
 	}
 }
 
-func TestNoopSummarizer_SummarizeHighlight(t *testing.T) {
-	noop := NewNoopSummarizer()
+func TestGHModelsClient_WriteNarrative_UnknownCitation(t *testing.T) {
+	// Response includes a URL not in the input items.
+	narContent := `{"sections":[{"heading":"Infra","body":"See [unknown](https://github.com/org/repo/issues/999)."}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := chatCompletionResponse{
+			Choices: []choice{{Message: message{Role: "assistant", Content: narContent}}},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
 
-	tests := []struct {
-		name          string
-		item          HighlightItem
-		expectedTheme string
-	}{
-		{
-			name: "with labels",
-			item: HighlightItem{
-				IssueURL:   "https://github.com/org/repo/issues/1",
-				IssueTitle: "Fix login bug",
-				Labels:     []string{"bug", "priority"},
-			},
-			expectedTheme: "bug",
-		},
-		{
-			name: "no labels",
-			item: HighlightItem{
-				IssueURL:   "https://github.com/org/repo/issues/2",
-				IssueTitle: "Some task",
-				Labels:     nil,
-			},
-			expectedTheme: "General",
-		},
+	// Capture WARN logs via a test handler.
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	ctx := context.WithValue(context.Background(), input.LoggerContextKey{}, logger)
+
+	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
+	narr, err := client.WriteNarrative(ctx, makeTestNarrativeItems(), makeTestRollup())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Narrative should still be returned intact.
+	if len(narr.Sections) != 1 {
+		t.Fatalf("expected 1 section, got %d", len(narr.Sections))
+	}
+	if !strings.Contains(narr.Sections[0].Body, "https://github.com/org/repo/issues/999") {
+		t.Errorf("body should be unmodified, got: %q", narr.Sections[0].Body)
+	}
+	if !strings.Contains(logBuf.String(), "unknown_citation_url") {
+		t.Errorf("expected WARN log for unknown citation, got: %s", logBuf.String())
+	}
+}
+
+func TestGHModelsClient_WriteNarrative_ThinInputFilter(t *testing.T) {
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		narContent := `{"sections":[{"heading":"Work","body":"Done [item](https://github.com/org/repo/issues/1)."}]}`
+		resp := chatCompletionResponse{
+			Choices: []choice{{Message: message{Role: "assistant", Content: narContent}}},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	items := []narrative.Item{
+		// Rich item — should be included.
+		{URL: "https://github.com/org/repo/issues/1", Title: "Good item", Body: "some body", State: "closed", OpenedAt: time.Now()},
+		// Thin item — should be excluded.
+		{URL: "https://github.com/org/repo/issues/2", Title: "Thin item", Body: "", State: "open", OpenedAt: time.Now()},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			h, err := noop.SummarizeHighlight(context.Background(), tc.item)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if h.Theme != tc.expectedTheme {
-				t.Errorf("expected theme %q, got %q", tc.expectedTheme, h.Theme)
-			}
-			if h.Title != tc.item.IssueTitle {
-				t.Errorf("expected title %q, got %q", tc.item.IssueTitle, h.Title)
-			}
-			if h.URL != tc.item.IssueURL {
-				t.Errorf("expected URL %q, got %q", tc.item.IssueURL, h.URL)
-			}
-			if h.Summary != tc.item.IssueTitle {
-				t.Errorf("expected summary %q, got %q", tc.item.IssueTitle, h.Summary)
-			}
-		})
+	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
+	_, err := client.WriteNarrative(context.Background(), items, makeTestRollup())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The request body should contain only the first item's URL.
+	if !strings.Contains(string(capturedBody), "https://github.com/org/repo/issues/1") {
+		t.Error("expected first item URL in request")
+	}
+	if strings.Contains(string(capturedBody), "https://github.com/org/repo/issues/2") {
+		t.Error("expected thin item to be excluded from request")
+	}
+}
+
+func TestGHModelsClient_WriteNarrative_EmptyAfterFilter(t *testing.T) {
+	requestMade := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestMade = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	// All items are thin.
+	items := []narrative.Item{
+		{URL: "https://github.com/org/repo/issues/1", Title: "Thin", Body: "", State: "open", OpenedAt: time.Now()},
+	}
+
+	client := NewGHModelsClient(srv.URL, "model", "token", "", 10*time.Second)
+	narr, err := client.WriteNarrative(context.Background(), items, makeTestRollup())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(narr.Sections) != 0 {
+		t.Errorf("expected empty narrative, got %d sections", len(narr.Sections))
+	}
+	if requestMade {
+		t.Error("expected NO HTTP request to be made when all items are thin")
 	}
 }
 

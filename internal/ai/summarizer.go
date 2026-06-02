@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/Attamusc/weekly-report-cli/internal/narrative"
+	"github.com/Attamusc/weekly-report-cli/internal/rollup"
 )
 
 // SentimentResult holds the AI's assessment of whether the reported status
@@ -45,6 +48,7 @@ type HeaderItem struct {
 }
 
 // Highlight represents a single curated highlight from AI processing.
+// Retained for Phase 2 temporary rendering path; deleted in Phase 4.
 type Highlight struct {
 	Theme   string // Category: "Bug Fixes", "Support & Reliability", "Infrastructure", etc.
 	Title   string // Issue/PR title
@@ -52,14 +56,15 @@ type Highlight struct {
 	Summary string // AI-written 1-line highlight
 }
 
-// HighlightItem represents input data for a single item to be considered for highlights.
-type HighlightItem struct {
-	IssueURL    string
-	IssueTitle  string
-	IssueState  string // "open", "closed"
-	IsPR        bool   // true if pull request
-	Labels      []string
-	UpdateTexts []string // Comments/body text for context
+// Narrative is the output of a WriteNarrative call.
+type Narrative struct {
+	Sections []NarrativeSection
+}
+
+// NarrativeSection is a single themed section of the narrative report.
+type NarrativeSection struct {
+	Heading string // e.g. "Azure migration progresses"
+	Body    string // markdown prose, may contain [text](url) inline citations
 }
 
 // Summarizer provides AI-powered summarization of status report updates
@@ -81,12 +86,10 @@ type Summarizer interface {
 	// GenerateHeader produces an executive summary paragraph from assembled report data.
 	GenerateHeader(ctx context.Context, items []HeaderItem) (string, error)
 
-	// SummarizeHighlight curates a single item and returns a Highlight with theme and summary.
-	SummarizeHighlight(ctx context.Context, item HighlightItem) (Highlight, error)
-
-	// MergeThemes renames and merges themes across a set of highlights, overwriting
-	// only the Theme field. Title, URL, and Summary are never read from the response.
-	MergeThemes(ctx context.Context, in []Highlight) ([]Highlight, error)
+	// WriteNarrative produces a structured narrative report from rich narrative.Item data.
+	// On AI error or unparseable response, returns Narrative{} and an error.
+	// The caller renders rollup-only when narrative is empty.
+	WriteNarrative(ctx context.Context, items []narrative.Item, r rollup.Rollup) (Narrative, error)
 }
 
 // NoopSummarizer provides a fallback implementation that returns raw text without AI processing
@@ -151,28 +154,9 @@ func (n *NoopSummarizer) GenerateHeader(_ context.Context, items []HeaderItem) (
 	return result, nil
 }
 
-// labelTheme returns a theme string derived from the first label in the list,
-// falling back to "General" when labels are empty.
-func labelTheme(labels []string) string {
-	if len(labels) > 0 {
-		return labels[0]
-	}
-	return "General"
-}
-
-// SummarizeHighlight returns a label-themed Highlight when AI is disabled.
-func (n *NoopSummarizer) SummarizeHighlight(_ context.Context, item HighlightItem) (Highlight, error) {
-	return Highlight{
-		Theme:   labelTheme(item.Labels),
-		Title:   item.IssueTitle,
-		URL:     item.IssueURL,
-		Summary: item.IssueTitle,
-	}, nil
-}
-
-// MergeThemes returns the input slice unchanged when AI is disabled.
-func (n *NoopSummarizer) MergeThemes(_ context.Context, in []Highlight) ([]Highlight, error) {
-	return in, nil
+// WriteNarrative returns an empty Narrative when AI is disabled.
+func (n *NoopSummarizer) WriteNarrative(_ context.Context, _ []narrative.Item, _ rollup.Rollup) (Narrative, error) {
+	return Narrative{}, nil
 }
 
 // DescribeBatch returns raw issue body text for each item (truncated for table display)
