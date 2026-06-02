@@ -200,17 +200,7 @@ func runHighlights(cmd *cobra.Command, args []string) error {
 	}
 
 	// ========== PHASE F: Render ==========
-	// TODO(TODO-f0ba083f): replace with RenderNarrativeReport once Phase 3 lands.
-	// For now, build a placeholder []ai.Highlight from narrative sections so the
-	// existing RenderHighlights can produce some output.
-	var highlights []ai.Highlight
-	for _, sec := range narr.Sections {
-		highlights = append(highlights, ai.Highlight{
-			Theme:   sec.Heading,
-			Summary: sec.Body,
-		})
-	}
-	output := format.RenderHighlights(highlights)
+	output := format.RenderNarrativeReport(narr, r, cfg.SinceDays)
 	if output == "" {
 		if !cfg.Quiet {
 			fmt.Fprintln(os.Stderr, "No notable highlights found.")
