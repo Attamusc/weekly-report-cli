@@ -102,8 +102,8 @@ install-lint:
 # Run all checks (format, vet, lint, test)
 check: fmt vet lint test
 
-# Install binary to GOPATH/bin
-install:
+# Install binary to GOPATH/bin (rebuilds first to ensure the on-PATH copy matches the local build)
+install: build
 	$(GOCMD) install $(LDFLAGS) .
 
 # Run the application with example arguments

@@ -8,15 +8,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Attamusc/weekly-report-cli/internal/input"
-	"github.com/Attamusc/weekly-report-cli/internal/narrative"
 	"github.com/Attamusc/weekly-report-cli/internal/retry"
-	"github.com/Attamusc/weekly-report-cli/internal/rollup"
 )
 
 // GHModelsClient implements Summarizer using GitHub Models API
@@ -65,14 +62,6 @@ type chatCompletionRequest struct {
 	Model       string    `json:"model"`
 	Messages    []message `json:"messages"`
 	Temperature float64   `json:"temperature"`
-}
-
-// chatCompletionRequestJSON is like chatCompletionRequest but includes response_format.
-type chatCompletionRequestJSON struct {
-	Model          string            `json:"model"`
-	Messages       []message         `json:"messages"`
-	Temperature    float64           `json:"temperature"`
-	ResponseFormat map[string]string `json:"response_format"`
 }
 
 type message struct {
@@ -313,11 +302,6 @@ func (c *GHModelsClient) callAPI(ctx context.Context, userPrompt string, systemP
 
 // makeHTTPRequest performs the actual HTTP request
 func (c *GHModelsClient) makeHTTPRequest(ctx context.Context, request chatCompletionRequest) (*chatCompletionResponse, error) {
-	return c.doHTTPRequest(ctx, request)
-}
-
-// makeHTTPRequestJSON performs the HTTP request for WriteNarrative (includes response_format).
-func (c *GHModelsClient) makeHTTPRequestJSON(ctx context.Context, request chatCompletionRequestJSON) (*chatCompletionResponse, error) {
 	return c.doHTTPRequest(ctx, request)
 }
 
@@ -771,251 +755,4 @@ func (c *GHModelsClient) GenerateHeader(ctx context.Context, items []HeaderItem)
 		return "", fmt.Errorf("failed to marshal header items: %w", err)
 	}
 	return c.callAPI(ctx, string(jsonBytes), headerSystemPrompt)
-}
-
-// ── WriteNarrative ───────────────────────────────────────────────────────────
-
-// narrativeInputItem is the compact JSON shape sent to the AI for each NarrativeItem.
-type narrativeInputItem struct {
-	URL            string                  `json:"url"`
-	Title          string                  `json:"title"`
-	Body           string                  `json:"body"`
-	State          string                  `json:"state"`
-	IsPR           bool                    `json:"isPR"`
-	Author         string                  `json:"author"`
-	Assignees      []string                `json:"assignees"`
-	Labels         []string                `json:"labels"`
-	OpenedAt       time.Time               `json:"openedAt"`
-	ClosedAt       *time.Time              `json:"closedAt,omitempty"`
-	MergedAt       *time.Time              `json:"mergedAt,omitempty"`
-	ClosedThisWeek bool                    `json:"closedThisWeek"`
-	MergedThisWeek bool                    `json:"mergedThisWeek"`
-	RecentComments []narrativeInputComment `json:"recentComments"`
-	Events         []narrativeInputEvent   `json:"events"`
-}
-
-type narrativeInputComment struct {
-	Author    string    `json:"author"`
-	CreatedAt time.Time `json:"createdAt"`
-	Body      string    `json:"body"`
-}
-
-type narrativeInputEvent struct {
-	Type   string    `json:"type"`
-	Actor  string    `json:"actor"`
-	At     time.Time `json:"at"`
-	Detail string    `json:"detail,omitempty"`
-}
-
-// narrativeResponse is the expected JSON shape from the AI.
-type narrativeResponse struct {
-	Sections []narrativeResponseSection `json:"sections"`
-}
-
-type narrativeResponseSection struct {
-	Heading string `json:"heading"`
-	Body    string `json:"body"`
-}
-
-// citationRegex matches inline markdown links with github.com URLs.
-var citationRegex = regexp.MustCompile(`\[[^\]]+\]\((https://github\.com/[^)]+)\)`)
-
-const narrativeSystemPrompt = `You are writing a weekly engineering narrative report.
-
-You will receive a JSON array of issues and pull requests from the past week.
-Each item includes: url, title, body, state, isPR, author, assignees, labels,
-openedAt, closedAt, mergedAt, closedThisWeek, mergedThisWeek, recentComments,
-and events.
-
-Write 3–5 thematic sections covering the most significant work.
-
-Section requirements:
-- Each section starts with ### <heading> then 1–2 paragraphs of prose (~80–150 words).
-- Use inline [text](url) citations linking to specific items.
-- Cover BOTH major initiatives AND notable day-to-day work.
-- Mention people by @username when their specific work warrants it.
-- SKIP routine work: entitlement adds, ownership cleanups, label-only changes, dependency bumps.
-- Be specific. Avoid generic phrases: "addresses", "ensures", "enhances",
-  "improves system reliability", "improves overall", "general improvements".
-- Total output: ≤ 600 words across all sections.
-
-Respond with ONLY a JSON object (no markdown fences):
-{"sections": [{"heading": "...", "body": "..."}]}`
-
-// rollupSummary builds a brief textual summary of rollup stats for use in the
-// narrative system prompt. It is intentionally lightweight: no full item data.
-func rollupSummary(r rollup.Rollup) string {
-	totalItems := len(r.AllSorted)
-	var dateRange string
-	if totalItems > 0 {
-		first := r.AllSorted[len(r.AllSorted)-1].Ref.UpdatedAt
-		last := r.AllSorted[0].Ref.UpdatedAt
-		dateRange = fmt.Sprintf("%s to %s", first.Format("2006-01-02"), last.Format("2006-01-02"))
-	}
-	type ac struct {
-		name string
-		n    int
-	}
-	var authors []ac
-	for a, items := range r.ByAuthor {
-		authors = append(authors, ac{a, len(items)})
-	}
-	for i := 0; i < len(authors)-1; i++ {
-		for j := i + 1; j < len(authors); j++ {
-			if authors[j].n > authors[i].n {
-				authors[i], authors[j] = authors[j], authors[i]
-			}
-		}
-	}
-	var top []string
-	for i, a := range authors {
-		if i >= 5 {
-			break
-		}
-		top = append(top, fmt.Sprintf("@%s (%d items)", a.name, a.n))
-	}
-	return fmt.Sprintf("Total rollup items: %d. Date range: %s. Top contributors: %s.",
-		totalItems, dateRange, strings.Join(top, ", "))
-}
-
-func (c *GHModelsClient) callJSONAPI(ctx context.Context, request chatCompletionRequestJSON) (string, error) {
-	var rawResponse string
-	var lastErr error
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			backoff := retry.CalculateBackoff(attempt-1, int(baseDelay.Milliseconds()))
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			case <-time.After(backoff):
-			}
-		}
-		resp, err := c.makeHTTPRequestJSON(ctx, request)
-		if err != nil {
-			lastErr = err
-			if httpErr, ok := err.(*HTTPError); ok && httpErr.StatusCode == 429 {
-				if retryAfter := httpErr.Headers.Get("Retry-After"); retryAfter != "" {
-					if seconds, parseErr := strconv.Atoi(retryAfter); parseErr == nil {
-						select {
-						case <-ctx.Done():
-							return "", ctx.Err()
-						case <-time.After(time.Duration(seconds) * time.Second):
-						}
-					}
-				}
-				continue
-			}
-			return "", fmt.Errorf("WriteNarrative API request failed: %w", err)
-		}
-		if len(resp.Choices) == 0 {
-			return "", fmt.Errorf("WriteNarrative: empty response")
-		}
-		rawResponse = resp.Choices[0].Message.Content
-		break
-	}
-	if rawResponse == "" && lastErr != nil {
-		return "", fmt.Errorf("WriteNarrative failed after %d retries: %w", maxRetries, lastErr)
-	}
-	return rawResponse, nil
-}
-
-// WriteNarrative produces a structured narrative report from rich NarrativeItem data.
-// Thin items (no body, no comments, no events) are excluded from the AI prompt.
-// On AI error or unparseable response, returns Narrative{} and an error.
-func (c *GHModelsClient) WriteNarrative(ctx context.Context, items []narrative.Item, r rollup.Rollup) (Narrative, error) {
-	logger := getContextLogger(ctx)
-
-	// ── Thin-input filter (premortem #7) ──
-	var filtered []narrative.Item
-	for _, it := range items {
-		if strings.TrimSpace(it.Body) == "" && len(it.RecentComments) == 0 && len(it.Events) == 0 {
-			logger.Debug("Excluding thin-input item from narrative", "url", it.URL)
-			continue
-		}
-		filtered = append(filtered, it)
-	}
-	if len(filtered) == 0 {
-		logger.Info("All narrative items excluded as thin-input; skipping AI call")
-		return Narrative{}, nil
-	}
-
-	// ── Build URL set for citation verification ──
-	inputURLs := make(map[string]bool, len(filtered))
-	for _, it := range filtered {
-		inputURLs[it.URL] = true
-	}
-
-	// ── Build compact JSON input ──
-	inputItems := make([]narrativeInputItem, len(filtered))
-	for i, it := range filtered {
-		comments := make([]narrativeInputComment, len(it.RecentComments))
-		for j, c := range it.RecentComments {
-			comments[j] = narrativeInputComment{Author: c.Author, CreatedAt: c.CreatedAt, Body: c.Body}
-		}
-		events := make([]narrativeInputEvent, len(it.Events))
-		for j, e := range it.Events {
-			events[j] = narrativeInputEvent{Type: e.Type, Actor: e.Actor, At: e.At, Detail: e.Detail}
-		}
-		inputItems[i] = narrativeInputItem{
-			URL: it.URL, Title: it.Title, Body: it.Body,
-			State: it.State, IsPR: it.IsPR, Author: it.Author,
-			Assignees: it.Assignees, Labels: it.Labels,
-			OpenedAt: it.OpenedAt, ClosedAt: it.ClosedAt, MergedAt: it.MergedAt,
-			ClosedThisWeek: it.ClosedThisWeek, MergedThisWeek: it.MergedThisWeek,
-			RecentComments: comments, Events: events,
-		}
-	}
-
-	// ── Build rollup context for system prompt ──
-	promptContext := fmt.Sprintf("Context from mechanical rollup:\n%s\n\nItems to narrate (%d):\n", rollupSummary(r), len(filtered))
-
-	itemBytes, err := json.Marshal(inputItems)
-	if err != nil {
-		return Narrative{}, fmt.Errorf("failed to marshal narrative items: %w", err)
-	}
-	userPrompt := promptContext + string(itemBytes)
-
-	logger.Debug("WriteNarrative AI call", "model", c.Model, "items", len(filtered))
-
-	// ── Make API call with JSON response format ──
-	request := chatCompletionRequestJSON{
-		Model:          c.Model,
-		Temperature:    temperature,
-		ResponseFormat: map[string]string{"type": "json_object"},
-		Messages: []message{
-			{Role: "system", Content: narrativeSystemPrompt},
-			{Role: "user", Content: userPrompt},
-		},
-	}
-
-	rawResponse, err := c.callJSONAPI(ctx, request)
-	if err != nil {
-		return Narrative{}, err
-	}
-
-	// ── Parse response ──
-	var nr narrativeResponse
-	if err := json.Unmarshal([]byte(rawResponse), &nr); err != nil {
-		return Narrative{}, fmt.Errorf("WriteNarrative: failed to parse response: %w", err)
-	}
-
-	// ── Citation verification (premortem #1) ──
-	unknownCount := 0
-	for _, sec := range nr.Sections {
-		matches := citationRegex.FindAllStringSubmatch(sec.Body, -1)
-		for _, m := range matches {
-			url := m[1]
-			if !inputURLs[url] {
-				logger.Warn("Narrative contains unknown citation URL", "unknown_citation_url", url)
-				unknownCount++
-			}
-		}
-	}
-	logger.Info("Narrative citation verification complete", "unknown_citations", unknownCount)
-
-	sections := make([]NarrativeSection, len(nr.Sections))
-	for i, s := range nr.Sections {
-		sections[i] = NarrativeSection(s)
-	}
-	return Narrative{Sections: sections}, nil
 }

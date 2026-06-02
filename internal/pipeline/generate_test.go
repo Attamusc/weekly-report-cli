@@ -29,14 +29,6 @@ func (m *mockFetcher) FetchCommentsSince(_ context.Context, _ input.IssueRef, _ 
 	return m.comments, m.err
 }
 
-func (m *mockFetcher) FetchTimelineSince(_ context.Context, _ input.IssueRef, _ time.Time) ([]github.TimelineEvent, error) {
-	return nil, nil
-}
-
-func (m *mockFetcher) FetchPullRequest(_ context.Context, _ input.IssueRef) (*github.PullRequestData, error) {
-	return nil, nil
-}
-
 // makeRef creates a test IssueRef.
 func makeRef(url string) input.IssueRef {
 	return input.IssueRef{URL: url, Owner: "owner", Repo: "repo", Number: 1}

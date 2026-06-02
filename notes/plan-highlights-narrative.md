@@ -331,3 +331,27 @@ activity feed vulnerabilities are currently being triaged...
 4. **Some thin-context items still included.** A few items with no body and no comments appear in the narrative by title reference only. Pre-filtering thin items before the AI call (as planned in premortem #7) would improve output density.
 
 **Overall verdict:** The redesign delivered on the primary goal. The output is now a readable narrative that covers the week's themes with cross-item synthesis and real citations. It is unambiguously more useful than the previous map-reduce output. Follow-up quality work filed as `highlights-narrative-followup` todos.
+
+## Final disposition
+
+The highlights subcommand was removed entirely on 2026-06-02 after production-scale
+validation (35 users / 833 items / 132 sections) demonstrated it doesn't produce
+useful output. The AI narrative call exceeded the gpt-4o-mini token limit; the
+rollup attribution fell back to non-input-list openers (including bots) for ~75%
+of sections; and the sheer volume made the output unscannable even with correct
+attribution.
+
+This note and its sibling plan/scout/research notes are preserved as a record of
+the design space we explored. If we revisit weekly-team-summary functionality in
+the future, the data and decisions captured here should inform the new design.
+Specifically:
+
+- Per-item map-reduce AI fundamentally cannot synthesize across items.
+- Single-call narrative AI cannot handle production-scale input within commodity
+  model context limits.
+- Mechanical rollup attribution requires a richer signal than search results
+  provide; even with tier-2 hydration, attribution rules are hard to make
+  intuitive across single-user vs multi-user team scopes.
+- "Nothing hidden" + "narrative summary" are in tension at scale; the more
+  comprehensive the rollup, the less useful the narrative becomes for a
+  reader who already has the rollup.

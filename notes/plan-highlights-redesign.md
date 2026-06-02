@@ -209,13 +209,38 @@ Most likely failure modes and the mitigations baked into the plan.
 
 ## Observed after rollout
 
-Smoke check date: <TBD>
-Command: <TBD>
+Smoke check date: 2026-06-01
+Command: `weekly-report-cli highlights --users Attamusc --since-days 7 --ai-top 5 --ai-concurrency 5 --verbose`
+Build: `bb104a8` (post-rewire + docs)
 
-- Discovered refs: <N>
-- Survivors after cut: <N>
-- Hydration API calls: <N> (should equal survivors, not discovered)
-- AI map calls: <N>
-- AI reduce calls: <N>
-- Wall clock: <Ns>
-- Notes: <observations>
+### Mechanical-only path (`--no-summary`)
+
+- Discovered refs (post-filter): 33 (45 raw → 12 dropped by bot filter)
+- Rollup: median 0.286 across 26 authors
+- Hydration API calls: 0 ✅ (skipped entirely)
+- AI calls: 0 ✅
+- Wall clock: ~3s (search-dominated)
+- Output: author-grouped markdown tables, format matches spec
+
+### AI path (`--ai-top 5`)
+
+- Discovered refs (post-filter): 33
+- Survivors after cut: 5 ✅ (capped by `--ai-top`, not by median)
+- Hydration API calls: 5 ✅ (matches survivors, not 33 — narrow hydration confirmed)
+- AI map calls: 5 (1 fell back to local highlight, 4 returned content)
+- AI reduce calls: 1 ✅
+- Total AI calls: 6 (vs. theoretical 1 batched call pre-redesign — premortem #4 cost increase as expected)
+- Wall clock: ~17s end-to-end (~8s map under retries, ~6s reduce)
+- Rate-limit retries: 8 across 5 map calls. All succeeded eventually via existing retry plumbing.
+- Output: themed markdown (Infrastructure / Security / Support & Reliability), grouped per spec
+
+### Issues observed (worth follow-up todos, not blockers)
+
+1. **Map prompt occasionally returns wrong JSON shape.** 1-of-5 map calls returned a JSON array when the parser expected a single object → `failed to parse highlight response: json: cannot unmarshal array into Go value of type ai.highlightSingleResponse`. Per-item fallback kicked in correctly (premortem partial-failure tolerance works). Fix: tighten `SummarizeHighlight` system prompt to explicitly require a single object, OR make the parser accept both shapes.
+2. **Several "successful" map responses look degraded.** Some output lines show summary == title (e.g. `[Epic] Integrate Herb into GitHub.com — [Epic] Integrate Herb into GitHub.com`). Indicates either a second silent fallback path or low-quality content from the model. Worth a quality probe.
+3. **Default `--ai-concurrency=5` saturates GitHub Models endpoint immediately.** 8 rate-limit hits across 5 calls. Not a correctness issue (retries handle it cleanly) but consider lowering default to 3 or adding token-bucket pacing if this is observed in production runs.
+4. **Labels column always empty in mechanical rollup.** Discovery search results don't populate `Labels` on `IssueRef` — only AI-path hydration fetches labels. The renderer correctly shows blank. Two options: (a) add labels to search-result preservation in `internal/discovery/search.go`, or (b) document this as expected (labels appear only in the AI-themed output, not the mechanical rollup).
+
+### Conclusion
+
+The core thesis is confirmed: token pressure is structurally removed (one item per map call), hydration is narrowed (5 of 33), and partial failures degrade gracefully instead of taking down the whole pipeline. The new architecture is shippable. Issues 1–4 above are quality polish, not architectural problems.

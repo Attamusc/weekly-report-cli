@@ -5,9 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/Attamusc/weekly-report-cli/internal/narrative"
-	"github.com/Attamusc/weekly-report-cli/internal/rollup"
 )
 
 // SentimentResult holds the AI's assessment of whether the reported status
@@ -47,17 +44,6 @@ type HeaderItem struct {
 	Summary          string  // The update summary text
 }
 
-// Narrative is the output of a WriteNarrative call.
-type Narrative struct {
-	Sections []NarrativeSection
-}
-
-// NarrativeSection is a single themed section of the narrative report.
-type NarrativeSection struct {
-	Heading string // e.g. "Azure migration progresses"
-	Body    string // markdown prose, may contain [text](url) inline citations
-}
-
 // Summarizer provides AI-powered summarization of status report updates
 type Summarizer interface {
 	// Summarize generates a summary for a single update
@@ -76,11 +62,6 @@ type Summarizer interface {
 
 	// GenerateHeader produces an executive summary paragraph from assembled report data.
 	GenerateHeader(ctx context.Context, items []HeaderItem) (string, error)
-
-	// WriteNarrative produces a structured narrative report from rich narrative.Item data.
-	// On AI error or unparseable response, returns Narrative{} and an error.
-	// The caller renders rollup-only when narrative is empty.
-	WriteNarrative(ctx context.Context, items []narrative.Item, r rollup.Rollup) (Narrative, error)
 }
 
 // NoopSummarizer provides a fallback implementation that returns raw text without AI processing
@@ -143,11 +124,6 @@ func (n *NoopSummarizer) GenerateHeader(_ context.Context, items []HeaderItem) (
 		result += fmt.Sprintf(" %d status changes.", transitionCount)
 	}
 	return result, nil
-}
-
-// WriteNarrative returns an empty Narrative when AI is disabled.
-func (n *NoopSummarizer) WriteNarrative(_ context.Context, _ []narrative.Item, _ rollup.Rollup) (Narrative, error) {
-	return Narrative{}, nil
 }
 
 // DescribeBatch returns raw issue body text for each item (truncated for table display)

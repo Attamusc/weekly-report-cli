@@ -239,7 +239,7 @@ If you see `x-ratelimit-limit-requests: 15` or similar, the token is free-tier. 
 
 Run date: 2026-06-01. Command: `highlights --users Attamusc --since-days 7 --ai-top 5 --ai-concurrency 5 --verbose`. Source data: 5 survivors from recent GitHub activity.
 
-| Metric | gpt-4o (default) | gpt-4o-mini | claude-haiku-4.5 (Copilot) |
+| Metric | gpt-5-mini (current default) | openai/gpt-4o-mini | claude-haiku-4.5 (Copilot) |
 |---|---|---|---|
 | Wall clock | 14.6s | 6.8s | 6.3s |
 | 429 rate-limited (retries) | 12 | 0 | 0 |
@@ -248,7 +248,7 @@ Run date: 2026-06-01. Command: `highlights --users Attamusc --since-days 7 --ai-
 | Endpoint | `models.github.ai` | `models.github.ai` | `api.githubcopilot.com` ✅ |
 
 **Notes:**
-- The `gpt-4o` default (gpt-4o-mini mapping) hit 12 rate-limit retries, adding ~8s of wall clock vs the other two.
+- The `gpt-5-mini` default hit 12 rate-limit retries (the tight 500 req/min pool — see earlier diagnostic table), adding ~8s of wall clock vs the other two.
 - All three runs produced 5/5 fallbacks (title echoes in the output) due to a pre-existing parsing bug: the `SummarizeHighlight` prompt for these items returns a JSON array instead of a single object, which the current parser rejects. This is not caused by the endpoint change.
 - The Haiku run confirmed the new Copilot code path works end-to-end: HTTP 200 from `api.githubcopilot.com`, correct path `/chat/completions`, `Copilot-Integration-Id: vscode-chat` header sent, OpenAI-shaped response parsed correctly.
 - Run 3 (Haiku) **did not crash**; all 5 items got responses, fallbacks were parse-shape issues identical to the other models.
@@ -256,3 +256,49 @@ Run date: 2026-06-01. Command: `highlights --users Attamusc --since-days 7 --ai-
 **Summary quality:** All three produced title-echo output due to the pre-existing fallback issue — not a meaningful quality comparison for this specific dataset. Qualitatively, Haiku response latency matched gpt-4o-mini (~1.9s map step) and both were significantly faster than the rate-limited gpt-4o default run.
 
 **Recommendation:** The Copilot endpoint is viable. Haiku 4.5 shows no latency or reliability disadvantage vs gpt-4o-mini. Rate limiting was a gpt-4o-only problem in this run. A meaningful quality comparison requires fixing the `SummarizeHighlight` parser first (see pre-existing issue with array responses).
+
+---
+
+## A/B run results — post parser-fix + default swap
+
+Run date: 2026-06-01, after commits `126ef19` (default → gpt-4o-mini) and `7fa15ba` (parser accepts array-wrapped responses + prompt tightened to require single object).
+
+Command: `highlights --users Attamusc --since-days 7 --ai-top 5 --ai-concurrency 5 --verbose`. Same 5 survivors as previous A/B.
+
+| Metric | gpt-4o-mini (new default) | claude-haiku-4.5 (Copilot) |
+|---|---|---|
+| Wall clock | 8.0s | 6.9s |
+| 429 rate-limited | 0 | 0 |
+| Parser fallbacks | 0 | 2/5 |
+| Empty-summary outputs | **2/5** | 0 |
+| Real summaries produced | 3/5 | 3/5 |
+| AI map step latency | ~2.1s | ~2.6s |
+
+### Per-item quality
+
+| Item | gpt-4o-mini | Haiku 4.5 |
+|---|---|---|
+| Herb integration | EMPTY | fallback (title-echo) |
+| Azure stand-up | 111-char real summary | 195-char real summary (more comprehensive) |
+| Move to Azure | 172-char real summary | fallback (title-echo) |
+| backend maxconn | EMPTY | 125-char real summary |
+| Symbol injection | generic summary (77 chars) | specific summary mentioning "profiles service" (73 chars) |
+
+**Both models produced 3/5 real summaries on different items** — not the same 3. The two models have *complementary* failure modes:
+- gpt-4o-mini fails by returning empty `summary` field (parser sees valid JSON, renderer emits awkward `title — ` line).
+- Haiku 4.5 fails by returning a response shape the parser rejects (triggers existing title-echo fallback).
+- On the one item both handled (security bounty), Haiku is more specific ("profiles service") while gpt-4o-mini is generic.
+
+### Conclusions
+
+1. **Pipeline is now structurally sound.** Zero 429s on both endpoints. No parser crashes. The map-reduce architecture is delivering as designed.
+2. **Default model swap was the right call.** gpt-4o-mini at concurrency=5 has zero rate-limit issues vs gpt-5-mini's 12 retries; eliminates the smoke-run failure mode.
+3. **Copilot endpoint is viable.** Haiku 4.5 works end-to-end; latency comparable; slightly higher quality on the items where it doesn't fall back. Whether the undocumented-endpoint risk is worth the marginal quality gain is a judgment call.
+4. **The remaining quality ceiling is data-driven, not model-driven.** Both models fail on items with sparse comment bodies (the items with empty/fallback output — "Herb integration", "Move to Azure", "backend maxconn" — are the ones where survivor selection promoted items via `5·closedThisWeek + 2·isPR` bonuses despite zero meaningful comment activity). This is TODO-ba84f7ee's hypothesis #2 confirmed.
+
+### Follow-ups identified
+
+- **NEW**: Treat empty `summary` string as a parse failure in `parseSingleHighlightResponse` so the fallback path fires consistently across models. Eliminates the ugly `title — ` rendering.
+- **TODO-ba84f7ee** can probably be closed in favor of: tweak score formula to require `CommentCount >= 1` for AI eligibility, OR skip AI for items with zero hydrated comment bodies. The structural problem is solved; what remains is selection.
+- **TODO-72389011** (lower default concurrency) is much less urgent now — gpt-4o-mini at concurrency=5 has 20K req/min headroom. Probably safe to keep default at 5.
+
