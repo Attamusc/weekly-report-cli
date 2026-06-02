@@ -66,6 +66,7 @@ func Compute(refs []input.IssueRef, since time.Time) Rollup {
 			Ref:    ref,
 			Raw:    raw,
 			Author: author,
+			Labels: ref.Labels,
 		}
 	}
 

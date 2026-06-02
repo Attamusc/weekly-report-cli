@@ -28,6 +28,7 @@ type IssueRef struct {
 	CommentCount int
 	UpdatedAt    time.Time
 	ClosedAt     *time.Time
+	Labels       []string
 }
 
 // String returns a string representation of the IssueRef

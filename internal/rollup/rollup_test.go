@@ -223,3 +223,32 @@ func TestUnknownAuthor(t *testing.T) {
 		t.Error("expected no empty-string key in ByAuthor")
 	}
 }
+
+func TestComputeLabelsPassthrough(t *testing.T) {
+	refs := []input.IssueRef{
+		{Owner: "org", Repo: "repo", Number: 1, URL: "https://github.com/org/repo/issues/1",
+			Labels: []string{"bug", "priority: high"}},
+		{Owner: "org", Repo: "repo", Number: 2, URL: "https://github.com/org/repo/issues/2"},
+	}
+	since := time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC)
+	r := Compute(refs, since)
+
+	var withLabels, noLabels int
+	for _, it := range r.AllSorted {
+		if it.Ref.Number == 1 {
+			withLabels++
+			if len(it.Labels) != 2 {
+				t.Errorf("item 1 Labels: got %v, want [bug priority: high]", it.Labels)
+			}
+		}
+		if it.Ref.Number == 2 {
+			noLabels++
+			if len(it.Labels) != 0 {
+				t.Errorf("item 2 Labels: got %v, want []", it.Labels)
+			}
+		}
+	}
+	if withLabels != 1 || noLabels != 1 {
+		t.Errorf("unexpected item counts: withLabels=%d noLabels=%d", withLabels, noLabels)
+	}
+}

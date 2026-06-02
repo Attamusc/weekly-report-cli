@@ -282,3 +282,56 @@ func TestSearch_SignalsPopulated(t *testing.T) {
 		t.Errorf("UpdatedAt: got %v, want %v", ref.UpdatedAt, updatedAt)
 	}
 }
+
+func TestSearch_LabelsPopulated(t *testing.T) {
+	labelName1 := "bug"
+	labelName2 := "priority: high"
+
+	searchResp := &githubapi.IssuesSearchResult{
+		Total: intPtr(1),
+		Issues: []*githubapi.Issue{
+			{
+				HTMLURL: strPtr("https://github.com/org/repo/issues/99"),
+				Number:  intPtr(99),
+				Title:   strPtr("A labelled issue"),
+				State:   strPtr("open"),
+				User: &githubapi.User{
+					Login: strPtr("bob"),
+					Type:  strPtr("User"),
+				},
+				Labels: []*githubapi.Label{
+					{Name: &labelName1},
+					{Name: &labelName2},
+				},
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(searchResp)
+	}))
+	defer server.Close()
+
+	serverURL, _ := url.Parse(server.URL + "/")
+	client := githubapi.NewClient(nil)
+	client.BaseURL = serverURL
+
+	refs, err := Search(context.Background(), client, []string{"bob"}, nil, time.Now().Add(-7*24*time.Hour))
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("got %d refs, want 1", len(refs))
+	}
+	ref := refs[0]
+	if len(ref.Labels) != 2 {
+		t.Fatalf("Labels: got %d, want 2 — %v", len(ref.Labels), ref.Labels)
+	}
+	if ref.Labels[0] != "bug" {
+		t.Errorf("Labels[0]: got %q, want \"bug\"", ref.Labels[0])
+	}
+	if ref.Labels[1] != "priority: high" {
+		t.Errorf("Labels[1]: got %q, want \"priority: high\"", ref.Labels[1])
+	}
+}

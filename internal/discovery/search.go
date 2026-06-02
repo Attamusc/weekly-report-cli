@@ -210,6 +210,11 @@ func parseSearchResult(issue *githubapi.Issue) (input.IssueRef, bool) {
 		t := issue.ClosedAt.Time
 		ref.ClosedAt = &t
 	}
+	for _, l := range issue.Labels {
+		if name := l.GetName(); name != "" {
+			ref.Labels = append(ref.Labels, name)
+		}
+	}
 	return ref, true
 }
 
