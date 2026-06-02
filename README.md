@@ -240,27 +240,34 @@ weekly-report-cli generate \
 ### `highlights` — Surface Notable Work
 
 The `highlights` command discovers issues and PRs touched by a set of GitHub users,
-ranks them via a deterministic mechanical rollup, and (by default) curates the
-top results with AI. It is designed for weekly team standup reports or async
-shoutouts and is **API-efficient**: comment bodies are only fetched for items
-that survive the scoring cut, not for every discovered item.
+ranks them via a deterministic mechanical rollup, and (by default) writes a
+narrative report with a single AI call. It is **API-efficient**: rich context is
+only fetched for items that survive the scoring cut.
+
+#### Design
+
+The output has two parts: a narrative section and a full mechanical rollup. The
+narrative gives the story — what actually moved, why it matters, what's blocked.
+The rollup beneath it gives the detail — scan by person or repo to find specifics.
+Nothing is hidden; every discovered item appears somewhere in the output.
 
 #### Pipeline
 
 ```
-A. Discover   — GitHub search → []IssueRef (preserves score signals in search metadata)
-B. Rollup     — Score every item: raw = comments + 5×closed_this_week + 2×is_pr;
-                normalize per repo; group by primary author → Rollup
-C. Cut        — survivors = items with score ≥ median, capped at --ai-top (default 50)
-D. Hydrate    — Fetch comment bodies ONLY for survivors (not all discovered items)
-E. AI map     — One SummarizeHighlight call per survivor (parallel, --ai-concurrency)
-F. AI reduce  — One MergeThemes call to rename/merge theme labels across all results
-G. Render     — Group by theme (AI path) or by author (--no-summary path)
+A. Discover       — GitHub search → []IssueRef (score signals in search metadata)
+B. Rollup         — Score every item: raw = comments + 5×closed_this_week + 2×is_pr;
+                    normalize per repo; group by primary author → Rollup
+C. Cut            — survivors = items with score ≥ median, capped at --ai-top (default 100)
+D. Tier-2 hydrate — For each survivor: fetch body + comments (since lookback) +
+                    timeline events + PR metadata (IsPR only)
+E. WriteNarrative — Single AI call over all hydrated items → narrative sections
+                    with inline [text](url) citations
+F. Render         — Narrative sections + "## All activity" rollup table by author
 ```
 
-When `--no-summary` is passed (or AI is disabled), phases D–F are skipped entirely
-and the tool renders the mechanical rollup grouped by author — zero AI calls, zero
-hydration API calls, zero extra cost.
+When `--no-summary` is passed (or AI is disabled), phases D–E are skipped and
+the tool renders the mechanical rollup grouped by author — zero AI calls, zero
+tier-2 API calls, zero extra cost. Pipe-friendly.
 
 #### Flags
 
@@ -269,28 +276,60 @@ hydration API calls, zero extra cost.
 | `--users` | *(required)* | Comma-separated GitHub usernames to surface work for |
 | `--orgs` | *(none)* | Scope results to these orgs only |
 | `--since-days` | `7` | Look-back window in days |
-| `--concurrency` | `5` | Max concurrent API requests during hydration (Phase D) |
-| `--ai-concurrency` | `5` | Max concurrent AI map requests (Phase E) |
-| `--ai-top` | `50` | Maximum survivors to send to AI; lower = fewer AI calls |
-| `--no-summary` | `false` | Skip AI; render mechanical rollup grouped by author |
-| `--summary-prompt` | *(none)* | Custom AI system prompt for the map step |
+| `--concurrency` | `5` | Max concurrent API requests during tier-2 hydration |
+| `--ai-top` | `100` | Max survivors sent to AI (cap for token budget) |
+| `--no-summary` | `false` | Skip AI; render mechanical rollup by author only |
+| `--summary-prompt` | *(none)* | Custom AI system prompt for the narrative call |
 | `--verbose` | `false` | Log per-call latency and pipeline diagnostics |
 | `--quiet` | `false` | Suppress progress output |
 
+#### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GITHUB_TOKEN` | *(required)* | GitHub personal access token |
+| `GITHUB_MODELS_ENABLED` | `true` | Set to `false` to disable AI |
+| `GITHUB_MODELS_ENDPOINT` | `https://models.inference.ai.azure.com` | Azure AI inference endpoint |
+| `GITHUB_MODELS_MODEL` | `gpt-4o-mini` | Model to use for the narrative call |
+
 #### API Volume
 
-- **Discovery:** 1 search API call per user (unchanged).
-- **Hydration:** One API call per *survivor* (≤ `--ai-top`, ≤ 50 by default).
-  Items that score below the median are **never hydrated** — the main cost saving
-  over the old approach.
-- **AI (default path):** `len(survivors)` map calls + 1 reduce call. Each map call
-  sees a single item so there is no token-pressure chunking.
+- **Discovery:** 1 search API call per user.
+- **Tier-2 hydration:** ~4 API calls per survivor (issue metadata + comments +
+  timeline + PR object for PRs). Items below the median score are never hydrated.
+- **AI (default path):** 1 WriteNarrative call (all survivors in one request).
 - **AI (--no-summary):** 0 calls.
+
+#### Output Sample
+
+```markdown
+# Weekly Highlights — Last 7 days (33 items)
+
+## Narrative
+
+### Progress on Azure Migration
+This week, significant strides were made on Azure migration initiatives...
+[text](https://github.com/org/repo/issues/42) landed the compute cutover;
+[text](https://github.com/org/repo/issues/51) closed out data-tier prep.
+
+### Reliability Improvements
+Three production incidents were resolved. Root-cause was a misconfigured
+cache TTL causing cascading failures under load...
+
+## All activity (33 items)
+
+## @alice
+
+| Item | Title | State | Score | Labels |
+|------|-------|-------|-------|--------|
+| [repo#42](https://github.com/org/repo/issues/42) | Migrate compute to Azure | closed | 1.00 | migration |
+| [repo#51](https://github.com/org/repo/issues/51) | Data tier prep | open | 0.80 |  |
+```
 
 #### Examples
 
 ```bash
-# Default: AI-curated highlights grouped by theme
+# Default: AI narrative + full rollup
 weekly-report-cli highlights --users "alice,bob,carol"
 
 # Scope to a specific org
@@ -299,32 +338,15 @@ weekly-report-cli highlights --users "alice,bob" --orgs "my-org"
 # Extend look-back to two weeks
 weekly-report-cli highlights --users "alice,bob" --since-days 14
 
-# Mechanical rollup only — no AI calls, no hydration, grouped by author:
-# Each author section is a markdown table: repo/num · title · state · score · labels
+# Mechanical rollup only — no AI calls, no hydration, grouped by author
 weekly-report-cli highlights --users "alice,bob" --no-summary
 
-# Limit AI to the top 20 items (fewer map calls, lower cost)
-weekly-report-cli highlights --users "alice,bob" --ai-top 20
-
-# Higher AI concurrency for large teams (more parallel map calls)
-weekly-report-cli highlights --users "alice,bob,carol,dave" --ai-concurrency 10
+# Limit AI input to top 30 items
+weekly-report-cli highlights --users "alice,bob" --ai-top 30
 
 # Verbose: shows per-call latency, survivor count, phase timings
 weekly-report-cli highlights --users "alice,bob" --verbose
 ```
-
-#### Output Shape
-
-**Default (AI on):** Markdown sections grouped by theme, each item with a
-one-sentence AI summary. Format is identical to the previous `highlights` output.
-
-**`--no-summary`:** Markdown table per author, columns:
-`Issue · Title · State · Score · Labels`. No AI involvement whatsoever.
-
-> **Note:** The `--no-summary` output format changed in the rollup redesign.
-> Previously it rendered label-bucketed output via the Noop AI path; now it
-> produces a genuine author-grouped rollup table with scores. This is intentional.
-
 ### Input Modes
 
 The tool supports three input modes:
