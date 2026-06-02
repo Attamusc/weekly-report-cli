@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -186,6 +187,64 @@ func TestAIMapHighlights_PreservesOrder(t *testing.T) {
 	}
 }
 
+// TestAIMapHighlights_SkipsAIForEmptyUpdateTexts verifies that survivors with
+// no hydrated comment bodies bypass SummarizeHighlight entirely, emit a
+// deterministic fallback Highlight, and log the skip.
+func TestAIMapHighlights_SkipsAIForEmptyUpdateTexts(t *testing.T) {
+	ref := makeRef("org", "repo", 42, false, 0, "alice")
+	ref.Title = "Closed with no comments"
+
+	survivors := []rollup.ScoredItem{
+		{Ref: ref, Score: 0.8, Labels: []string{"bug"}},
+	}
+
+	var callCount atomic.Int32
+	fake := &fakeAISummarizer{
+		summarizeHighlightFn: func(_ context.Context, item ai.HighlightItem) (ai.Highlight, error) {
+			if item.IssueURL == ref.URL {
+				callCount.Add(1)
+			}
+			return ai.Highlight{URL: item.IssueURL, Title: item.IssueTitle, Theme: "T", Summary: "AI summary"}, nil
+		},
+	}
+
+	// Provide hydrated data with empty UpdateTexts.
+	dataByURL := map[string]pipeline.HighlightData{
+		ref.URL: {
+			IssueURL:    ref.URL,
+			IssueTitle:  ref.Title,
+			UpdateTexts: []string{}, // empty — no comment bodies
+			Labels:      []string{"bug"},
+		},
+	}
+
+	// Use a logger that captures output so we can assert the skip message.
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	highlights := aiMapHighlights(context.Background(), fake, survivors, dataByURL, 1, quietCfg(1), logger)
+
+	if len(highlights) != 1 {
+		t.Fatalf("expected 1 highlight, got %d", len(highlights))
+	}
+	if callCount.Load() != 0 {
+		t.Errorf("expected 0 AI calls for empty-context item, got %d", callCount.Load())
+	}
+	h := highlights[0]
+	if h.URL != ref.URL {
+		t.Errorf("expected URL %s, got %s", ref.URL, h.URL)
+	}
+	if h.Title != ref.Title {
+		t.Errorf("expected title %q, got %q", ref.Title, h.Title)
+	}
+	if h.Summary != ref.Title {
+		t.Errorf("expected summary == title (%q), got %q", ref.Title, h.Summary)
+	}
+	if !strings.Contains(logBuf.String(), "Skipping AI for empty-context item") {
+		t.Errorf("expected skip log message, got: %s", logBuf.String())
+	}
+}
+
 // ── scoredItemToHighlightItem tests ──────────────────────────────────────
 
 func TestScoredItemToHighlightItem_NilDataMap(t *testing.T) {
@@ -354,7 +413,12 @@ func TestRenderAIPath(t *testing.T) {
 	}
 
 	fake := &fakeAISummarizer{}
-	highlights := aiMapHighlights(context.Background(), fake, survivors, nil, 2, quietCfg(2), testLogger())
+	// Provide non-empty UpdateTexts so the AI-skip filter does not fire.
+	dataByURL := map[string]pipeline.HighlightData{
+		survivors[0].Ref.URL: {IssueURL: survivors[0].Ref.URL, UpdateTexts: []string{"comment body"}},
+		survivors[1].Ref.URL: {IssueURL: survivors[1].Ref.URL, UpdateTexts: []string{"comment body"}},
+	}
+	highlights := aiMapHighlights(context.Background(), fake, survivors, dataByURL, 2, quietCfg(2), testLogger())
 
 	merged, err := fake.MergeThemes(context.Background(), highlights)
 	if err != nil {

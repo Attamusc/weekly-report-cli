@@ -254,17 +254,28 @@ func aiMapHighlights(
 
 			item := scoredItemToHighlightItem(scored, dataByURL)
 
-			start := time.Now()
-			h, err := summarizer.SummarizeHighlight(ctx, item)
-			elapsed := time.Since(start)
-
-			if cfg.Verbose {
-				logger.Debug("SummarizeHighlight", "url", item.IssueURL, "latency_ms", elapsed.Milliseconds())
-			}
-
-			if err != nil {
-				logger.Warn("SummarizeHighlight failed, using fallback", "url", item.IssueURL, "error", err)
+			var h ai.Highlight
+			if len(item.UpdateTexts) == 0 {
+				// No hydrated comment bodies — skip AI entirely and emit a
+				// deterministic highlight. The score formula can promote
+				// items with zero comments (closed PRs, etc.) that are
+				// real signal but give the AI nothing to summarize.
+				logger.Info("Skipping AI for empty-context item", "url", item.IssueURL)
 				h = fallbackHighlight(item)
+			} else {
+				start := time.Now()
+				var err error
+				h, err = summarizer.SummarizeHighlight(ctx, item)
+				elapsed := time.Since(start)
+
+				if cfg.Verbose {
+					logger.Debug("SummarizeHighlight", "url", item.IssueURL, "latency_ms", elapsed.Milliseconds())
+				}
+
+				if err != nil {
+					logger.Warn("SummarizeHighlight failed, using fallback", "url", item.IssueURL, "error", err)
+					h = fallbackHighlight(item)
+				}
 			}
 
 			current := completed.Add(1)
