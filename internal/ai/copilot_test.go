@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	copilot "github.com/github/copilot-sdk/go"
 )
@@ -12,7 +13,10 @@ import (
 type fakeCopilotRuntime struct {
 	session        copilotSession
 	createErr      error
+	stopErr        error
 	createdOptions []sessionOptions
+	stopCalls      int
+	forceStopCalls int
 }
 
 func (f *fakeCopilotRuntime) Start(context.Context) error { return nil }
@@ -20,8 +24,11 @@ func (f *fakeCopilotRuntime) CreateSession(_ context.Context, options sessionOpt
 	f.createdOptions = append(f.createdOptions, options)
 	return f.session, f.createErr
 }
-func (f *fakeCopilotRuntime) Stop() error { return nil }
-func (f *fakeCopilotRuntime) ForceStop()  {}
+func (f *fakeCopilotRuntime) Stop() error {
+	f.stopCalls++
+	return f.stopErr
+}
+func (f *fakeCopilotRuntime) ForceStop() { f.forceStopCalls++ }
 
 type fakeCopilotSession struct {
 	response        string
@@ -29,13 +36,23 @@ type fakeCopilotSession struct {
 	disconnectErr   error
 	prompts         []string
 	disconnectCalls int
+	send            func(context.Context) (string, error)
+	abortCalls      int
+	abortContextErr error
 }
 
-func (f *fakeCopilotSession) SendAndWait(_ context.Context, prompt string) (string, error) {
+func (f *fakeCopilotSession) SendAndWait(ctx context.Context, prompt string) (string, error) {
 	f.prompts = append(f.prompts, prompt)
+	if f.send != nil {
+		return f.send(ctx)
+	}
 	return f.response, f.sendErr
 }
-func (f *fakeCopilotSession) Abort(context.Context) error { return nil }
+func (f *fakeCopilotSession) Abort(ctx context.Context) error {
+	f.abortCalls++
+	f.abortContextErr = ctx.Err()
+	return nil
+}
 func (f *fakeCopilotSession) Disconnect() error {
 	f.disconnectCalls++
 	return f.disconnectErr
@@ -61,7 +78,7 @@ func TestCopilotInterfacesAcceptProjectOwnedFakes(t *testing.T) {
 func TestCopilotSummarizerSummarize(t *testing.T) {
 	session := &fakeCopilotSession{response: "Completed OAuth2 integration."}
 	runtime := &fakeCopilotRuntime{session: session}
-	client := NewCopilotSummarizer(runtime, "test-model", "custom instructions")
+	client := NewCopilotSummarizer(runtime, "test-model", "custom instructions", time.Second)
 
 	got, err := client.Summarize(context.Background(), "Implement authentication", "https://github.com/org/repo/issues/1", "OAuth2 is complete.")
 	if err != nil {
@@ -89,7 +106,7 @@ func TestCopilotSummarizerSummarize(t *testing.T) {
 func TestCopilotSummarizerSummarizeMany(t *testing.T) {
 	session := &fakeCopilotSession{response: "Combined summary."}
 	runtime := &fakeCopilotRuntime{session: session}
-	client := NewCopilotSummarizer(runtime, "test-model", "")
+	client := NewCopilotSummarizer(runtime, "test-model", "", time.Second)
 
 	got, err := client.SummarizeMany(context.Background(), "Multiple updates", "https://github.com/org/repo/issues/2", []string{"Newest update", "Older update"})
 	if err != nil {
@@ -114,7 +131,7 @@ func TestCopilotSummarizerBatchDescriptionAndHeader(t *testing.T) {
 	t.Run("summary batch preserves nested URL keyed results", func(t *testing.T) {
 		session := &fakeCopilotSession{response: `{"https://github.com/org/repo/issues/1":{"summary":"Shipped.","sentiment":{"status":"on_track","explanation":"Work completed."}}}`}
 		runtime := &fakeCopilotRuntime{session: session}
-		client := NewCopilotSummarizer(runtime, "test-model", "")
+		client := NewCopilotSummarizer(runtime, "test-model", "", time.Second)
 		items := []BatchItem{{IssueURL: "https://github.com/org/repo/issues/1", IssueTitle: "Feature", UpdateTexts: []string{"Shipped"}, ReportedStatus: "On Track"}}
 
 		got, err := client.SummarizeBatch(context.Background(), items)
@@ -132,7 +149,7 @@ func TestCopilotSummarizerBatchDescriptionAndHeader(t *testing.T) {
 	t.Run("description batch preserves partial results", func(t *testing.T) {
 		session := &fakeCopilotSession{response: `{"https://github.com/org/repo/issues/1":"Project description."}`}
 		runtime := &fakeCopilotRuntime{session: session}
-		client := NewCopilotSummarizer(runtime, "test-model", "")
+		client := NewCopilotSummarizer(runtime, "test-model", "", time.Second)
 		items := []DescribeBatchItem{
 			{IssueURL: "https://github.com/org/repo/issues/1", IssueTitle: "One", IssueBody: "Body one"},
 			{IssueURL: "https://github.com/org/repo/issues/2", IssueTitle: "Two", IssueBody: "Body two"},
@@ -153,7 +170,7 @@ func TestCopilotSummarizerBatchDescriptionAndHeader(t *testing.T) {
 	t.Run("header uses header contract", func(t *testing.T) {
 		session := &fakeCopilotSession{response: "Good progress this week."}
 		runtime := &fakeCopilotRuntime{session: session}
-		client := NewCopilotSummarizer(runtime, "test-model", "")
+		client := NewCopilotSummarizer(runtime, "test-model", "", time.Second)
 
 		got, err := client.GenerateHeader(context.Background(), []HeaderItem{{StatusCaption: "Done", Title: "Feature", Summary: "Shipped."}})
 		if err != nil {
@@ -169,7 +186,7 @@ func TestCopilotSummarizerBatchDescriptionAndHeader(t *testing.T) {
 }
 
 func TestCopilotSummarizerBatchMalformedResponse(t *testing.T) {
-	client := NewCopilotSummarizer(&fakeCopilotRuntime{session: &fakeCopilotSession{response: "not structured"}}, "test-model", "")
+	client := NewCopilotSummarizer(&fakeCopilotRuntime{session: &fakeCopilotSession{response: "not structured"}}, "test-model", "", time.Second)
 	_, err := client.SummarizeBatch(context.Background(), []BatchItem{{IssueURL: "url"}})
 	if err == nil || !strings.Contains(err.Error(), "failed to parse batch response") {
 		t.Fatalf("SummarizeBatch() error = %v, want parse error", err)
@@ -179,7 +196,7 @@ func TestCopilotSummarizerBatchMalformedResponse(t *testing.T) {
 func TestCopilotSummarizerBatchChunksIntoIsolatedSessions(t *testing.T) {
 	session := &fakeCopilotSession{response: `{"url":"summary"}`}
 	runtime := &fakeCopilotRuntime{session: session}
-	client := NewCopilotSummarizer(runtime, "test-model", "")
+	client := NewCopilotSummarizer(runtime, "test-model", "", time.Second)
 	items := make([]BatchItem, maxBatchSize+1)
 	for i := range items {
 		items[i].IssueURL = "url"
@@ -195,7 +212,7 @@ func TestCopilotSummarizerBatchChunksIntoIsolatedSessions(t *testing.T) {
 
 func TestCopilotSummarizerDisconnectsOnFailure(t *testing.T) {
 	session := &fakeCopilotSession{sendErr: errors.New("inference failed")}
-	client := NewCopilotSummarizer(&fakeCopilotRuntime{session: session}, "test-model", "")
+	client := NewCopilotSummarizer(&fakeCopilotRuntime{session: session}, "test-model", "", time.Second)
 
 	_, err := client.Summarize(context.Background(), "Issue", "url", "update")
 	if err == nil || !strings.Contains(err.Error(), "inference failed") {
@@ -206,9 +223,62 @@ func TestCopilotSummarizerDisconnectsOnFailure(t *testing.T) {
 	}
 }
 
+func TestCopilotSummarizerTimeoutAbortsWithFreshContextAndDisconnects(t *testing.T) {
+	session := &fakeCopilotSession{send: func(ctx context.Context) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}}
+	client := NewCopilotSummarizer(&fakeCopilotRuntime{session: session}, "test-model", "", time.Nanosecond)
+
+	_, err := client.Summarize(context.Background(), "Issue", "url", "update")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Summarize() error = %v, want deadline exceeded", err)
+	}
+	if session.abortCalls != 1 {
+		t.Errorf("Abort() calls = %d, want 1", session.abortCalls)
+	}
+	if session.abortContextErr != nil {
+		t.Errorf("Abort() context error = %v, want live cleanup context", session.abortContextErr)
+	}
+	if session.disconnectCalls != 1 {
+		t.Errorf("Disconnect() calls = %d, want 1", session.disconnectCalls)
+	}
+}
+
+func TestCopilotSummarizerCleanupIsIdempotent(t *testing.T) {
+	t.Run("graceful stop", func(t *testing.T) {
+		runtime := &fakeCopilotRuntime{}
+		client := NewCopilotSummarizer(runtime, "test-model", "", time.Second)
+
+		if err := client.Cleanup(); err != nil {
+			t.Fatalf("Cleanup() error = %v", err)
+		}
+		if err := client.Cleanup(); err != nil {
+			t.Fatalf("second Cleanup() error = %v", err)
+		}
+		if runtime.stopCalls != 1 || runtime.forceStopCalls != 0 {
+			t.Errorf("Stop()/ForceStop() calls = %d/%d, want 1/0", runtime.stopCalls, runtime.forceStopCalls)
+		}
+	})
+
+	t.Run("failed stop forces shutdown", func(t *testing.T) {
+		runtime := &fakeCopilotRuntime{stopErr: errors.New("stop failed")}
+		client := NewCopilotSummarizer(runtime, "test-model", "", time.Second)
+
+		firstErr := client.Cleanup()
+		secondErr := client.Cleanup()
+		if firstErr == nil || secondErr == nil || firstErr.Error() != secondErr.Error() {
+			t.Fatalf("Cleanup() errors = %v, %v, want same stop failure", firstErr, secondErr)
+		}
+		if runtime.stopCalls != 1 || runtime.forceStopCalls != 1 {
+			t.Errorf("Stop()/ForceStop() calls = %d/%d, want 1/1", runtime.stopCalls, runtime.forceStopCalls)
+		}
+	})
+}
+
 func TestCopilotSummarizerReturnsDisconnectFailure(t *testing.T) {
 	session := &fakeCopilotSession{response: "summary", disconnectErr: errors.New("disconnect failed")}
-	client := NewCopilotSummarizer(&fakeCopilotRuntime{session: session}, "test-model", "")
+	client := NewCopilotSummarizer(&fakeCopilotRuntime{session: session}, "test-model", "", time.Second)
 
 	_, err := client.Summarize(context.Background(), "Issue", "url", "update")
 	if err == nil || !strings.Contains(err.Error(), "disconnect failed") {

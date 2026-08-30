@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	copilot "github.com/github/copilot-sdk/go"
 )
@@ -33,15 +35,32 @@ type CopilotSummarizer struct {
 	runtime      copilotRuntime
 	model        string
 	systemPrompt string
+	timeout      time.Duration
+	cleanupOnce  sync.Once
+	cleanupErr   error
 }
 
+const abortTimeout = 5 * time.Second
+
 // NewCopilotSummarizer creates a Copilot SDK-backed summarizer.
-func NewCopilotSummarizer(runtime copilotRuntime, model, systemPrompt string) *CopilotSummarizer {
+func NewCopilotSummarizer(runtime copilotRuntime, model, systemPrompt string, timeout time.Duration) *CopilotSummarizer {
 	return &CopilotSummarizer{
 		runtime:      runtime,
 		model:        model,
 		systemPrompt: systemPrompt,
+		timeout:      timeout,
 	}
+}
+
+// Cleanup stops the command-scoped Copilot runtime. Repeated calls are safe.
+func (c *CopilotSummarizer) Cleanup() error {
+	c.cleanupOnce.Do(func() {
+		c.cleanupErr = c.runtime.Stop()
+		if c.cleanupErr != nil {
+			c.runtime.ForceStop()
+		}
+	})
+	return c.cleanupErr
 }
 
 // Summarize generates a summary for a single update.
@@ -237,7 +256,15 @@ func (c *CopilotSummarizer) complete(ctx context.Context, systemPrompt, prompt s
 		}
 	}()
 
-	result, err = session.SendAndWait(ctx, prompt)
+	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	result, err = session.SendAndWait(requestCtx, prompt)
+	if err != nil && requestCtx.Err() != nil {
+		abortCtx, abortCancel := context.WithTimeout(context.Background(), abortTimeout)
+		_ = session.Abort(abortCtx)
+		abortCancel()
+	}
 	if err != nil {
 		return "", fmt.Errorf("complete Copilot request: %w", err)
 	}
