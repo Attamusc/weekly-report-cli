@@ -16,16 +16,16 @@ inputs:
     required: true
 
   copilot-token:
-    description: 'Optional fine-grained PAT with Copilot Requests permission; defaults to the calling workflow token'
+    description: 'Optional fine-grained PAT with account-level Copilot Requests permission (classic PATs unsupported); defaults to the calling workflow token, which requires copilot-requests: write and organization policy approval'
     required: false
 
   copilot-cli-version:
-    description: 'Exact @github/copilot version to install'
+    description: 'Exact @github/copilot CLI version to install (advanced override)'
     required: false
     default: '1.0.79'
 
   copilot-model:
-    description: 'Copilot model used for summarization'
+    description: 'Copilot model used for summarization; availability depends on account and organization policy'
     required: false
     default: 'claude-haiku-4.5'
 
@@ -80,7 +80,7 @@ inputs:
     default: 'false'
 
   no-summary:
-    description: 'Disable AI summarization (default: false)'
+    description: 'Disable Copilot CLI setup and AI summarization (default: false)'
     required: false
     default: 'false'
 
