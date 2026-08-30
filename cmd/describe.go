@@ -138,6 +138,7 @@ func runDescribe(cmd *cobra.Command, args []string) error {
 
 	defer deps.Cleanup()
 	ctx, cfg, logger, fetcher, summarizer, issueRefs := deps.Ctx, deps.Cfg, deps.Logger, deps.Fetcher, deps.Summarizer, deps.IssueRefs
+	diagnostic := deps.Diagnostic
 
 	// ========== PHASE A: Collect all issue data (parallel) ==========
 	logger.Info("Collecting issue data...", "concurrency", cfg.Concurrency)
@@ -199,7 +200,8 @@ func runDescribe(cmd *cobra.Command, args []string) error {
 		var err error
 		descriptions, err = pipeline.BatchDescribe(ctx, summarizer, allData, logger)
 		if err != nil {
-			logger.Warn("Batch description failed, using fallbacks", "error", err)
+			writeCopilotFallback(diagnostic, classifyCopilotFailure(err, copilotStageInference))
+			logger.Debug("Batch description failed, using fallbacks", "category", classifyCopilotFailure(err, copilotStageInference))
 			descriptions = make(map[string]string)
 		}
 	} else {

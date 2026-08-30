@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -54,11 +55,16 @@ type commandDeps struct {
 	Summarizer ai.Summarizer
 	IssueRefs  []input.IssueRef
 	Cleanup    func()
+	Diagnostic io.Writer
 }
 
 // setupCommand initializes shared dependencies from config input and resolver config.
 // Returns config.ErrNoRows if no issue references are found.
 func setupCommand(cfgInput config.ConfigInput, resolverCfg input.ResolverConfig) (*commandDeps, error) {
+	return setupCommandWithDiagnostic(cfgInput, resolverCfg, os.Stderr)
+}
+
+func setupCommandWithDiagnostic(cfgInput config.ConfigInput, resolverCfg input.ResolverConfig, diagnostic io.Writer) (*commandDeps, error) {
 	ctx := context.Background()
 
 	cfg, err := config.FromEnvAndFlags(cfgInput)
@@ -92,7 +98,7 @@ func setupCommand(cfgInput config.ConfigInput, resolverCfg input.ResolverConfig)
 
 	logger.Debug("Initializing GitHub client")
 	fetcher := &githubFetcher{client: github.New(ctx, cfg.GitHubToken)}
-	summarizer, cleanup := initSummarizer(ctx, cfg, logger)
+	summarizer, cleanup := initSummarizer(ctx, cfg, logger, diagnostic)
 
 	return &commandDeps{
 		Ctx:        ctx,
@@ -102,6 +108,7 @@ func setupCommand(cfgInput config.ConfigInput, resolverCfg input.ResolverConfig)
 		Summarizer: summarizer,
 		IssueRefs:  issueRefs,
 		Cleanup:    cleanup,
+		Diagnostic: diagnostic,
 	}, nil
 }
 
@@ -178,7 +185,7 @@ func (f *githubFetcher) FetchCommentsSince(ctx context.Context, ref input.IssueR
 }
 
 // initSummarizer creates and starts the configured AI summarizer.
-func initSummarizer(ctx context.Context, cfg *config.Config, logger *slog.Logger) (ai.Summarizer, func()) {
+func initSummarizer(ctx context.Context, cfg *config.Config, logger *slog.Logger, diagnostic io.Writer) (ai.Summarizer, func()) {
 	if !cfg.Copilot.Enabled {
 		logger.Debug("AI summarization disabled")
 		return ai.NewNoopSummarizer(), func() {}
@@ -197,7 +204,7 @@ func initSummarizer(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	cancel()
 	if err != nil {
 		_ = summarizer.Cleanup()
-		logger.Warn("Copilot unavailable; using non-AI fallback content")
+		writeCopilotFallback(diagnostic, classifyCopilotFailure(err, copilotStageStartup))
 		return ai.NewNoopSummarizer(), func() {}
 	}
 
@@ -209,6 +216,50 @@ func initSummarizer(ctx context.Context, cfg *config.Config, logger *slog.Logger
 			}
 		})
 	}
+}
+
+type copilotFailureStage int
+
+const (
+	copilotStageStartup copilotFailureStage = iota
+	copilotStageInference
+)
+
+type copilotFailureCategory string
+
+const (
+	copilotFailureMissingCLI    copilotFailureCategory = "missing executable"
+	copilotFailureAuthorization copilotFailureCategory = "authorization"
+	copilotFailureModel         copilotFailureCategory = "model availability"
+	copilotFailureStartup       copilotFailureCategory = "startup"
+	copilotFailureInference     copilotFailureCategory = "inference"
+)
+
+func classifyCopilotFailure(err error, stage copilotFailureStage) copilotFailureCategory {
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "executable file not found"), strings.Contains(message, "no such file or directory"):
+		return copilotFailureMissingCLI
+	case strings.Contains(message, "unauthorized"), strings.Contains(message, "forbidden"), strings.Contains(message, "authentication"), strings.Contains(message, "permission"), strings.Contains(message, "401"), strings.Contains(message, "403"):
+		return copilotFailureAuthorization
+	case strings.Contains(message, "model") && (strings.Contains(message, "unavailable") || strings.Contains(message, "unsupported") || strings.Contains(message, "not found")):
+		return copilotFailureModel
+	case stage == copilotStageStartup:
+		return copilotFailureStartup
+	default:
+		return copilotFailureInference
+	}
+}
+
+func writeCopilotFallback(w io.Writer, category copilotFailureCategory) {
+	action := map[copilotFailureCategory]string{
+		copilotFailureMissingCLI:    "Install GitHub Copilot CLI and ensure copilot is on PATH.",
+		copilotFailureAuthorization: "Check Copilot Requests permission and your Copilot authentication.",
+		copilotFailureModel:         "Check that the configured Copilot model is available for your account and organization.",
+		copilotFailureStartup:       "Run copilot --version to verify the Copilot CLI installation and authentication.",
+		copilotFailureInference:     "Retry the command; if it persists, check Copilot service availability.",
+	}[category]
+	_, _ = fmt.Fprintf(w, "Copilot summarization unavailable (%s); using non-AI fallback content. %s\n", category, action)
 }
 
 func copilotChildEnv(environ []string) []string {
