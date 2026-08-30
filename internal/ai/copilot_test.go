@@ -110,6 +110,89 @@ func TestCopilotSummarizerSummarizeMany(t *testing.T) {
 	}
 }
 
+func TestCopilotSummarizerBatchDescriptionAndHeader(t *testing.T) {
+	t.Run("summary batch preserves nested URL keyed results", func(t *testing.T) {
+		session := &fakeCopilotSession{response: `{"https://github.com/org/repo/issues/1":{"summary":"Shipped.","sentiment":{"status":"on_track","explanation":"Work completed."}}}`}
+		runtime := &fakeCopilotRuntime{session: session}
+		client := NewCopilotSummarizer(runtime, "test-model", "")
+		items := []BatchItem{{IssueURL: "https://github.com/org/repo/issues/1", IssueTitle: "Feature", UpdateTexts: []string{"Shipped"}, ReportedStatus: "On Track"}}
+
+		got, err := client.SummarizeBatch(context.Background(), items)
+		if err != nil {
+			t.Fatalf("SummarizeBatch() error = %v", err)
+		}
+		if got[items[0].IssueURL].Summary != "Shipped." || got[items[0].IssueURL].Sentiment == nil {
+			t.Errorf("SummarizeBatch() = %#v, want nested result", got)
+		}
+		if len(runtime.createdOptions) != 1 || runtime.createdOptions[0].SystemPrompt != batchSystemPrompt {
+			t.Errorf("created options = %#v, want one batch session", runtime.createdOptions)
+		}
+	})
+
+	t.Run("description batch preserves partial results", func(t *testing.T) {
+		session := &fakeCopilotSession{response: `{"https://github.com/org/repo/issues/1":"Project description."}`}
+		runtime := &fakeCopilotRuntime{session: session}
+		client := NewCopilotSummarizer(runtime, "test-model", "")
+		items := []DescribeBatchItem{
+			{IssueURL: "https://github.com/org/repo/issues/1", IssueTitle: "One", IssueBody: "Body one"},
+			{IssueURL: "https://github.com/org/repo/issues/2", IssueTitle: "Two", IssueBody: "Body two"},
+		}
+
+		got, err := client.DescribeBatch(context.Background(), items)
+		if err != nil {
+			t.Fatalf("DescribeBatch() error = %v", err)
+		}
+		if len(got) != 1 || got[items[0].IssueURL] != "Project description." {
+			t.Errorf("DescribeBatch() = %#v, want one partial result", got)
+		}
+		if runtime.createdOptions[0].SystemPrompt != describeSystemPrompt {
+			t.Error("DescribeBatch() did not use description system prompt")
+		}
+	})
+
+	t.Run("header uses header contract", func(t *testing.T) {
+		session := &fakeCopilotSession{response: "Good progress this week."}
+		runtime := &fakeCopilotRuntime{session: session}
+		client := NewCopilotSummarizer(runtime, "test-model", "")
+
+		got, err := client.GenerateHeader(context.Background(), []HeaderItem{{StatusCaption: "Done", Title: "Feature", Summary: "Shipped."}})
+		if err != nil {
+			t.Fatalf("GenerateHeader() error = %v", err)
+		}
+		if got != "Good progress this week." {
+			t.Errorf("GenerateHeader() = %q", got)
+		}
+		if runtime.createdOptions[0].SystemPrompt != headerSystemPrompt || !strings.Contains(session.prompts[0], `"title":"Feature"`) {
+			t.Errorf("header session options/prompts = %#v / %#v", runtime.createdOptions, session.prompts)
+		}
+	})
+}
+
+func TestCopilotSummarizerBatchMalformedResponse(t *testing.T) {
+	client := NewCopilotSummarizer(&fakeCopilotRuntime{session: &fakeCopilotSession{response: "not structured"}}, "test-model", "")
+	_, err := client.SummarizeBatch(context.Background(), []BatchItem{{IssueURL: "url"}})
+	if err == nil || !strings.Contains(err.Error(), "failed to parse batch response") {
+		t.Fatalf("SummarizeBatch() error = %v, want parse error", err)
+	}
+}
+
+func TestCopilotSummarizerBatchChunksIntoIsolatedSessions(t *testing.T) {
+	session := &fakeCopilotSession{response: `{"url":"summary"}`}
+	runtime := &fakeCopilotRuntime{session: session}
+	client := NewCopilotSummarizer(runtime, "test-model", "")
+	items := make([]BatchItem, maxBatchSize+1)
+	for i := range items {
+		items[i].IssueURL = "url"
+	}
+
+	if _, err := client.SummarizeBatch(context.Background(), items); err != nil {
+		t.Fatalf("SummarizeBatch() error = %v", err)
+	}
+	if len(runtime.createdOptions) != 2 || session.disconnectCalls != 2 {
+		t.Errorf("sessions created/disconnected = %d/%d, want 2/2", len(runtime.createdOptions), session.disconnectCalls)
+	}
+}
+
 func TestCopilotSummarizerDisconnectsOnFailure(t *testing.T) {
 	session := &fakeCopilotSession{sendErr: errors.New("inference failed")}
 	client := NewCopilotSummarizer(&fakeCopilotRuntime{session: session}, "test-model", "")

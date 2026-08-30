@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -51,6 +52,168 @@ func (c *CopilotSummarizer) Summarize(ctx context.Context, title, url, update st
 // SummarizeMany generates a summary for multiple updates ordered newest first.
 func (c *CopilotSummarizer) SummarizeMany(ctx context.Context, title, url string, updates []string) (string, error) {
 	return c.complete(ctx, c.getSystemPrompt(), buildManySummaryPrompt(title, url, updates))
+}
+
+// SummarizeBatch generates URL-keyed summaries for multiple issues.
+func (c *CopilotSummarizer) SummarizeBatch(ctx context.Context, items []BatchItem) (map[string]BatchResult, error) {
+	if len(items) == 0 {
+		return make(map[string]BatchResult), nil
+	}
+	if len(items) > maxBatchSize {
+		return chunkedBatch(ctx, items, getContextLogger(ctx), "summarize", c.SummarizeBatch)
+	}
+
+	userPrompt, err := c.buildBatchPrompt(items)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build summarize prompt: %w", err)
+	}
+	text, err := c.complete(ctx, batchSystemPrompt, userPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("summarize batch with Copilot: %w", err)
+	}
+	return c.parseBatchResponse(text, items)
+}
+
+// DescribeBatch generates URL-keyed project descriptions.
+func (c *CopilotSummarizer) DescribeBatch(ctx context.Context, items []DescribeBatchItem) (map[string]string, error) {
+	if len(items) == 0 {
+		return make(map[string]string), nil
+	}
+	if len(items) > maxBatchSize {
+		return chunkedBatch(ctx, items, getContextLogger(ctx), "describe", c.DescribeBatch)
+	}
+
+	userPrompt, err := c.buildDescribePrompt(items)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build describe prompt: %w", err)
+	}
+	text, err := c.complete(ctx, describeSystemPrompt, userPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("describe batch with Copilot: %w", err)
+	}
+	return c.parseDescribeResponse(text, items)
+}
+
+// GenerateHeader produces an executive summary paragraph from assembled report data.
+func (c *CopilotSummarizer) GenerateHeader(ctx context.Context, items []HeaderItem) (string, error) {
+	if len(items) == 0 {
+		return "", nil
+	}
+
+	type headerRequestItem struct {
+		Status     string  `json:"status"`
+		Transition *string `json:"transition"`
+		New        bool    `json:"new"`
+		Title      string  `json:"title"`
+		Summary    string  `json:"summary"`
+	}
+	request := make([]headerRequestItem, len(items))
+	for i, item := range items {
+		request[i] = headerRequestItem{
+			Status: item.StatusCaption, Transition: item.StatusTransition, New: item.NewItem,
+			Title: item.Title, Summary: item.Summary,
+		}
+	}
+	userPrompt, err := json.Marshal(request)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal header items: %w", err)
+	}
+	text, err := c.complete(ctx, headerSystemPrompt, string(userPrompt))
+	if err != nil {
+		return "", fmt.Errorf("generate header with Copilot: %w", err)
+	}
+	return text, nil
+}
+
+func (c *CopilotSummarizer) buildBatchPrompt(items []BatchItem) (string, error) {
+	request := batchRequest{Items: make([]batchRequestItem, len(items))}
+	for i, item := range items {
+		request.Items[i] = batchRequestItem{ID: item.IssueURL, Issue: item.IssueTitle, Updates: item.UpdateTexts, ReportedStatus: item.ReportedStatus}
+	}
+	text, err := json.Marshal(request)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal batch request: %w", err)
+	}
+	return string(text), nil
+}
+
+func (c *CopilotSummarizer) parseBatchResponse(response string, items []BatchItem) (map[string]BatchResult, error) {
+	var nested map[string]sentimentResponseItem
+	if err := json.Unmarshal([]byte(response), &nested); err == nil && len(nested) > 0 {
+		for _, item := range nested {
+			if item.Summary != "" {
+				return convertNestedResponse(nested), nil
+			}
+			break
+		}
+	}
+
+	var flat map[string]string
+	if err := json.Unmarshal([]byte(response), &flat); err == nil && len(flat) > 0 {
+		results := make(map[string]BatchResult, len(flat))
+		for url, summary := range flat {
+			results[url] = BatchResult{Summary: summary}
+		}
+		return results, nil
+	}
+	return parseMarkdownBatchResponse(response, items)
+}
+
+func parseMarkdownBatchResponse(response string, items []BatchItem) (map[string]BatchResult, error) {
+	results := make(map[string]BatchResult)
+	for _, part := range strings.Split(response, "## SUMMARY") {
+		lines := strings.SplitN(strings.TrimSpace(part), "\n", 2)
+		if len(lines) < 2 {
+			continue
+		}
+		for _, item := range items {
+			if strings.Contains(strings.TrimSpace(lines[0]), item.IssueURL) {
+				results[item.IssueURL] = BatchResult{Summary: strings.TrimSpace(lines[1])}
+				break
+			}
+		}
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("failed to parse batch response in both JSON and markdown formats")
+	}
+	return results, nil
+}
+
+func (c *CopilotSummarizer) buildDescribePrompt(items []DescribeBatchItem) (string, error) {
+	request := describeRequest{Items: make([]describeRequestItem, len(items))}
+	for i, item := range items {
+		request.Items[i] = describeRequestItem{ID: item.IssueURL, Issue: item.IssueTitle, Body: item.IssueBody}
+	}
+	text, err := json.Marshal(request)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal describe request: %w", err)
+	}
+	return string(text), nil
+}
+
+func (c *CopilotSummarizer) parseDescribeResponse(response string, items []DescribeBatchItem) (map[string]string, error) {
+	var results map[string]string
+	if err := json.Unmarshal([]byte(response), &results); err == nil {
+		return results, nil
+	}
+
+	results = make(map[string]string)
+	for _, part := range strings.Split(response, "## ") {
+		lines := strings.SplitN(strings.TrimSpace(part), "\n", 2)
+		if len(lines) < 2 {
+			continue
+		}
+		for _, item := range items {
+			if strings.Contains(strings.TrimSpace(lines[0]), item.IssueURL) {
+				results[item.IssueURL] = strings.TrimSpace(lines[1])
+				break
+			}
+		}
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("failed to parse describe response in both JSON and markdown formats")
+	}
+	return results, nil
 }
 
 func (c *CopilotSummarizer) getSystemPrompt() string {
