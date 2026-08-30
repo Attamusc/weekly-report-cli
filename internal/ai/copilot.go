@@ -52,6 +52,20 @@ func NewCopilotSummarizer(runtime copilotRuntime, model, systemPrompt string, ti
 	}
 }
 
+// NewSDKCopilotSummarizer creates a summarizer backed by the Copilot SDK runtime.
+func NewSDKCopilotSummarizer(token, model, systemPrompt string, timeout time.Duration, env []string) *CopilotSummarizer {
+	options := &copilot.ClientOptions{Env: env, GitHubToken: token}
+	if token == "" {
+		options.UseLoggedInUser = copilot.Bool(true)
+	}
+	return NewCopilotSummarizer(newSDKCopilotRuntime(copilot.NewClient(options)), model, systemPrompt, timeout)
+}
+
+// Start starts the command-scoped Copilot runtime.
+func (c *CopilotSummarizer) Start(ctx context.Context) error {
+	return c.runtime.Start(ctx)
+}
+
 // Cleanup stops the command-scoped Copilot runtime. Repeated calls are safe.
 func (c *CopilotSummarizer) Cleanup() error {
 	c.cleanupOnce.Do(func() {
@@ -74,6 +88,8 @@ func (c *CopilotSummarizer) SummarizeMany(ctx context.Context, title, url string
 }
 
 // SummarizeBatch generates URL-keyed summaries for multiple issues.
+//
+//nolint:dupl // Summary and description batches intentionally retain distinct types and prompts.
 func (c *CopilotSummarizer) SummarizeBatch(ctx context.Context, items []BatchItem) (map[string]BatchResult, error) {
 	if len(items) == 0 {
 		return make(map[string]BatchResult), nil
@@ -94,6 +110,8 @@ func (c *CopilotSummarizer) SummarizeBatch(ctx context.Context, items []BatchIte
 }
 
 // DescribeBatch generates URL-keyed project descriptions.
+//
+//nolint:dupl // Summary and description batches intentionally retain distinct types and prompts.
 func (c *CopilotSummarizer) DescribeBatch(ctx context.Context, items []DescribeBatchItem) (map[string]string, error) {
 	if len(items) == 0 {
 		return make(map[string]string), nil

@@ -22,14 +22,11 @@ func TestFromEnvAndFlags_DefaultValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Models.BaseURL != "https://models.github.ai" {
-		t.Errorf("got BaseURL=%q, want default", cfg.Models.BaseURL)
+	if cfg.Copilot.Model != "claude-haiku-4.5" {
+		t.Errorf("got Model=%q, want default", cfg.Copilot.Model)
 	}
-	if cfg.Models.Model != "gpt-4o-mini" {
-		t.Errorf("got Model=%q, want default", cfg.Models.Model)
-	}
-	if cfg.Models.Timeout.Seconds() != 120 {
-		t.Errorf("got Timeout=%v, want 120s", cfg.Models.Timeout)
+	if cfg.Copilot.Timeout.Seconds() != 120 {
+		t.Errorf("got Timeout=%v, want 120s", cfg.Copilot.Timeout)
 	}
 	if cfg.SinceDays != 7 {
 		t.Errorf("got SinceDays=%d, want 7", cfg.SinceDays)
@@ -41,17 +38,17 @@ func TestFromEnvAndFlags_DefaultValues(t *testing.T) {
 
 func TestFromEnvAndFlags_EnvVarOverrides(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token")
-	t.Setenv("GITHUB_MODELS_MODEL", "gpt-4o")
-	t.Setenv("GITHUB_MODELS_BASE_URL", "https://custom.example.com")
+	t.Setenv("COPILOT_GITHUB_TOKEN", "copilot-token")
+	t.Setenv("COPILOT_MODEL", "gpt-4o")
 	cfg, err := FromEnvAndFlags(ConfigInput{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Models.Model != "gpt-4o" {
-		t.Errorf("got Model=%q, want gpt-4o", cfg.Models.Model)
+	if cfg.Copilot.Model != "gpt-4o" {
+		t.Errorf("got Model=%q, want gpt-4o", cfg.Copilot.Model)
 	}
-	if cfg.Models.BaseURL != "https://custom.example.com" {
-		t.Errorf("got BaseURL=%q, want custom URL", cfg.Models.BaseURL)
+	if cfg.Copilot.Token != "copilot-token" {
+		t.Errorf("got Token=%q, want copilot-token", cfg.Copilot.Token)
 	}
 }
 
@@ -82,18 +79,29 @@ func TestFromEnvAndFlags_DisableSummary(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token")
 	t.Setenv("DISABLE_SUMMARY", "1")
 	cfg, _ := FromEnvAndFlags(ConfigInput{})
-	if cfg.Models.Enabled {
-		t.Error("Models.Enabled should be false when DISABLE_SUMMARY is set")
+	if cfg.Copilot.Enabled {
+		t.Error("Copilot.Enabled should be false when DISABLE_SUMMARY is set")
 	}
-	if cfg.Models.Sentiment {
+	if cfg.Copilot.Sentiment {
 		t.Error("Sentiment should be false when AI is disabled")
+	}
+}
+
+func TestFromEnvAndFlags_DisableSummaryInput(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "test-token")
+	cfg, err := FromEnvAndFlags(ConfigInput{DisableSummary: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Copilot.Enabled {
+		t.Error("Copilot.Enabled should be false when DisableSummary=true")
 	}
 }
 
 func TestFromEnvAndFlags_SentimentDisabled(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token")
 	cfg, _ := FromEnvAndFlags(ConfigInput{NoSentiment: true})
-	if cfg.Models.Sentiment {
+	if cfg.Copilot.Sentiment {
 		t.Error("Sentiment should be false when NoSentiment=true")
 	}
 }
@@ -105,8 +113,8 @@ func TestFromEnvAndFlags_AITimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Models.Timeout.Seconds() != 30 {
-		t.Errorf("got Timeout=%v, want 30s", cfg.Models.Timeout)
+	if cfg.Copilot.Timeout.Seconds() != 30 {
+		t.Errorf("got Timeout=%v, want 30s", cfg.Copilot.Timeout)
 	}
 }
 

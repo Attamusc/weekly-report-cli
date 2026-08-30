@@ -154,6 +154,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	defer deps.Cleanup()
 	ctx, cfg, logger, fetcher, summarizer, issueRefs := deps.Ctx, deps.Cfg, deps.Logger, deps.Fetcher, deps.Summarizer, deps.IssueRefs
 
 	// Calculate time window
@@ -216,7 +217,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 
 	// ========== PHASE B: Batch summarization (single API call) ==========
 	var batchResults map[string]ai.BatchResult
-	if cfg.Models.Enabled {
+	if cfg.Copilot.Enabled {
 		var err error
 		batchResults, err = pipeline.BatchSummarize(ctx, summarizer, allData, logger)
 		if err != nil {
@@ -229,7 +230,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// ========== PHASE C: Create final results ==========
-	rows, notes := pipeline.AssembleGenerateResults(allData, batchResults, cfg.Models.Sentiment, logger)
+	rows, notes := pipeline.AssembleGenerateResults(allData, batchResults, cfg.Copilot.Sentiment, logger)
 
 	// ========== PHASE D: Compare with previous report (if provided) ==========
 	if previousReportPath != "" {
