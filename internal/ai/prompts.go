@@ -10,7 +10,7 @@ import (
 
 const (
 	defaultSystemPrompt = `Refine the content in the engineering status updates to be one
-	paragraph of roughly 3-5 sentences, present tense, third-person, markdown-ready, 
+	paragraph of roughly 3-5 sentences, present tense, third-person, markdown-ready,
 	no prefatory text. Attempt to not lose context when summarizing.
 
 	When the source material contains links (GitHub issue/PR references, URLs, etc.),
