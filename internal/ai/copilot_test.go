@@ -185,6 +185,69 @@ func TestCopilotSummarizerBatchDescriptionAndHeader(t *testing.T) {
 	})
 }
 
+func TestCopilotSummarizerBatchFallbackResponses(t *testing.T) {
+	items := []BatchItem{
+		{IssueURL: "https://github.com/org/repo/issues/1", IssueTitle: "Feature A"},
+		{IssueURL: "https://github.com/org/repo/issues/2", IssueTitle: "Bug B"},
+	}
+	tests := []struct {
+		name     string
+		response string
+		want     map[string]string
+	}{
+		{
+			name: "flat JSON",
+			response: `{
+				"https://github.com/org/repo/issues/1": "Legacy summary for feature A",
+				"https://github.com/org/repo/issues/2": "Legacy summary for bug B"
+			}`,
+			want: map[string]string{
+				"https://github.com/org/repo/issues/1": "Legacy summary for feature A",
+				"https://github.com/org/repo/issues/2": "Legacy summary for bug B",
+			},
+		},
+		{
+			name: "markdown",
+			response: `## SUMMARY https://github.com/org/repo/issues/1
+Markdown summary for feature A.
+
+## SUMMARY https://github.com/org/repo/issues/2
+Markdown summary for bug B.`,
+			want: map[string]string{
+				"https://github.com/org/repo/issues/1": "Markdown summary for feature A.",
+				"https://github.com/org/repo/issues/2": "Markdown summary for bug B.",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			session := &fakeCopilotSession{response: tc.response}
+			client := NewCopilotSummarizer(&fakeCopilotRuntime{session: session}, "test-model", "", time.Second)
+
+			got, err := client.SummarizeBatch(context.Background(), items)
+			if err != nil {
+				t.Fatalf("SummarizeBatch() error = %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("SummarizeBatch() returned %d results, want %d", len(got), len(tc.want))
+			}
+			for url, wantSummary := range tc.want {
+				result := got[url]
+				if result.Summary != wantSummary {
+					t.Errorf("SummarizeBatch()[%q].Summary = %q, want %q", url, result.Summary, wantSummary)
+				}
+				if result.Sentiment != nil {
+					t.Errorf("SummarizeBatch()[%q].Sentiment = %+v, want nil", url, result.Sentiment)
+				}
+			}
+			if session.disconnectCalls != 1 {
+				t.Errorf("Disconnect() calls = %d, want 1", session.disconnectCalls)
+			}
+		})
+	}
+}
+
 func TestCopilotSummarizerBatchMalformedResponse(t *testing.T) {
 	client := NewCopilotSummarizer(&fakeCopilotRuntime{session: &fakeCopilotSession{response: "not structured"}}, "test-model", "", time.Second)
 	_, err := client.SummarizeBatch(context.Background(), []BatchItem{{IssueURL: "url"}})
