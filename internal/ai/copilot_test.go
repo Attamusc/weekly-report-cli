@@ -207,6 +207,17 @@ func TestCopilotSummarizerBatchFallbackResponses(t *testing.T) {
 			},
 		},
 		{
+			name: "complete JSON fence observed from Copilot",
+			response: "```json\n{\n" +
+				`  "https://github.com/org/repo/issues/1": {"summary":"Fenced summary for feature A","sentiment":null},` + "\n" +
+				`  "https://github.com/org/repo/issues/2": {"summary":"Fenced summary for bug B","sentiment":null}` +
+				"\n}\n```",
+			want: map[string]string{
+				"https://github.com/org/repo/issues/1": "Fenced summary for feature A",
+				"https://github.com/org/repo/issues/2": "Fenced summary for bug B",
+			},
+		},
+		{
 			name: "markdown",
 			response: `## SUMMARY https://github.com/org/repo/issues/1
 Markdown summary for feature A.
@@ -248,11 +259,50 @@ Markdown summary for bug B.`,
 	}
 }
 
+func TestCopilotSummarizerDescribeFencedResponses(t *testing.T) {
+	items := []DescribeBatchItem{{IssueURL: "url", IssueTitle: "Synthetic"}}
+	tests := []struct {
+		name     string
+		response string
+		want     string
+		wantErr  bool
+	}{
+		{name: "complete JSON fence", response: "```json\n{\"url\":\"description\"}\n```", want: "description"},
+		{name: "concatenated fences", response: "```json\n{\"url\":\"first\"}\n```\n```json\n{\"url\":\"second\"}\n```", wantErr: true},
+		{name: "fenced array", response: "```json\n[\n{\"url\":\"description\"}\n]\n```", wantErr: true},
+		{name: "invalid JSON with markdown", response: "```json\ninvalid\n## url\nmust not be accepted\n```", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := NewCopilotSummarizer(&fakeCopilotRuntime{session: &fakeCopilotSession{response: tc.response}}, "test-model", "", time.Second)
+			got, err := client.DescribeBatch(context.Background(), items)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("DescribeBatch() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if !tc.wantErr && got["url"] != tc.want {
+				t.Errorf("DescribeBatch()[url] = %q, want %q", got["url"], tc.want)
+			}
+		})
+	}
+}
+
 func TestCopilotSummarizerBatchMalformedResponse(t *testing.T) {
-	client := NewCopilotSummarizer(&fakeCopilotRuntime{session: &fakeCopilotSession{response: "not structured"}}, "test-model", "", time.Second)
-	_, err := client.SummarizeBatch(context.Background(), []BatchItem{{IssueURL: "url"}})
-	if err == nil || !strings.Contains(err.Error(), "failed to parse batch response") {
-		t.Fatalf("SummarizeBatch() error = %v, want parse error", err)
+	responses := []string{
+		"not structured",
+		"Here is the result:\n```json\n{\"url\":{\"summary\":\"summary\",\"sentiment\":null}}\n```",
+		"```json\n{\"url\":{\"summary\":\"summary\",\"sentiment\":null}}",
+		"```json\n[{\"url\":\"url\",\"summary\":\"summary\"}]\n```",
+		"```json\n{\"url\":\"first\"}\n```\n```json\n{\"url\":\"second\"}\n```",
+		"```json\n{\"url\":\"summary\"}\n```\nprose\n```",
+		"```json\n[\n  {\"url\":\"url\",\"summary\":\"summary\"}\n]\n```",
+		"```json\ninvalid\n## SUMMARY url\nmust not be accepted\n```",
+	}
+	for _, response := range responses {
+		client := NewCopilotSummarizer(&fakeCopilotRuntime{session: &fakeCopilotSession{response: response}}, "test-model", "", time.Second)
+		_, err := client.SummarizeBatch(context.Background(), []BatchItem{{IssueURL: "url"}})
+		if err == nil || !strings.Contains(err.Error(), "failed to parse batch response") {
+			t.Errorf("SummarizeBatch() response %q error = %v, want parse error", response, err)
+		}
 	}
 }
 

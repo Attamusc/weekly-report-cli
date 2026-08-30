@@ -175,6 +175,16 @@ func (c *CopilotSummarizer) buildBatchPrompt(items []BatchItem) (string, error) 
 }
 
 func (c *CopilotSummarizer) parseBatchResponse(response string, items []BatchItem) (map[string]BatchResult, error) {
+	if inner, fenced := unwrapSingleCompleteJSONFence(response); fenced {
+		return parseAllowedBatchJSONObject(inner)
+	}
+	if results, err := parseAllowedBatchJSONObject(response); err == nil {
+		return results, nil
+	}
+	return parseMarkdownBatchResponse(response, items)
+}
+
+func parseAllowedBatchJSONObject(response string) (map[string]BatchResult, error) {
 	var nested map[string]sentimentResponseItem
 	if err := json.Unmarshal([]byte(response), &nested); err == nil && len(nested) > 0 {
 		for _, item := range nested {
@@ -193,7 +203,21 @@ func (c *CopilotSummarizer) parseBatchResponse(response string, items []BatchIte
 		}
 		return results, nil
 	}
-	return parseMarkdownBatchResponse(response, items)
+	return nil, fmt.Errorf("failed to parse batch response as an allowed JSON object")
+}
+
+func unwrapSingleCompleteJSONFence(response string) (string, bool) {
+	trimmed := strings.TrimSpace(response)
+	const opening = "```json\n"
+	const closing = "\n```"
+	if !strings.HasPrefix(trimmed, opening) || !strings.HasSuffix(trimmed, closing) {
+		return response, false
+	}
+	inner := strings.TrimSuffix(strings.TrimPrefix(trimmed, opening), closing)
+	if strings.Contains(inner, "\n```") {
+		return "", true
+	}
+	return inner, true
 }
 
 func parseMarkdownBatchResponse(response string, items []BatchItem) (map[string]BatchResult, error) {
@@ -229,12 +253,14 @@ func (c *CopilotSummarizer) buildDescribePrompt(items []DescribeBatchItem) (stri
 }
 
 func (c *CopilotSummarizer) parseDescribeResponse(response string, items []DescribeBatchItem) (map[string]string, error) {
-	var results map[string]string
-	if err := json.Unmarshal([]byte(response), &results); err == nil {
+	if inner, fenced := unwrapSingleCompleteJSONFence(response); fenced {
+		return parseAllowedDescribeJSONObject(inner)
+	}
+	if results, err := parseAllowedDescribeJSONObject(response); err == nil {
 		return results, nil
 	}
 
-	results = make(map[string]string)
+	results := make(map[string]string)
 	for _, part := range strings.Split(response, "## ") {
 		lines := strings.SplitN(strings.TrimSpace(part), "\n", 2)
 		if len(lines) < 2 {
@@ -249,6 +275,14 @@ func (c *CopilotSummarizer) parseDescribeResponse(response string, items []Descr
 	}
 	if len(results) == 0 {
 		return nil, fmt.Errorf("failed to parse describe response in both JSON and markdown formats")
+	}
+	return results, nil
+}
+
+func parseAllowedDescribeJSONObject(response string) (map[string]string, error) {
+	var results map[string]string
+	if err := json.Unmarshal([]byte(response), &results); err != nil {
+		return nil, fmt.Errorf("failed to parse describe response as an allowed JSON object: %w", err)
 	}
 	return results, nil
 }
