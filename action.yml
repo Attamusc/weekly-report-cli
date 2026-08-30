@@ -15,6 +15,20 @@ inputs:
     description: 'GitHub token with repo and read:project scopes'
     required: true
 
+  copilot-token:
+    description: 'Optional fine-grained PAT with Copilot Requests permission; defaults to the calling workflow token'
+    required: false
+
+  copilot-cli-version:
+    description: 'Exact @github/copilot version to install'
+    required: false
+    default: '1.0.79'
+
+  copilot-model:
+    description: 'Copilot model used for summarization'
+    required: false
+    default: 'claude-haiku-4.5'
+
   # Generate command options
   project:
     description: 'GitHub Project board URL or identifier (e.g., "org:my-org/5")'
@@ -142,12 +156,49 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: ${{ github.action_path }}/scripts/install.sh
 
+    - name: Set up Copilot CLI
+      id: copilot
+      shell: bash
+      env:
+        COPILOT_CLI_VERSION: ${{ inputs.copilot-cli-version }}
+        NO_SUMMARY: ${{ inputs.no-summary }}
+      run: |
+        echo "copilot-available=false" >> "$GITHUB_OUTPUT"
+
+        if [ "$NO_SUMMARY" = "true" ]; then
+          exit 0
+        fi
+
+        ANNOTATION_VERSION=${COPILOT_CLI_VERSION//'%'/'%25'}
+        ANNOTATION_VERSION=${ANNOTATION_VERSION//$'\r'/'%0D'}
+        ANNOTATION_VERSION=${ANNOTATION_VERSION//$'\n'/'%0A'}
+
+        if ! npm install --global "@github/copilot@${COPILOT_CLI_VERSION}"; then
+          echo "::error::Failed to install @github/copilot version ${ANNOTATION_VERSION}; report generation will continue without AI summaries"
+          exit 0
+        fi
+
+        if ! command -v copilot >/dev/null 2>&1; then
+          echo "::error::Installed @github/copilot version ${ANNOTATION_VERSION}, but the copilot executable is unavailable; report generation will continue without AI summaries"
+          exit 0
+        fi
+
+        if ! npm list --global --depth=0 "@github/copilot@${COPILOT_CLI_VERSION}" >/dev/null 2>&1 || ! copilot --version >/dev/null 2>&1; then
+          echo "::error::Could not verify copilot version ${ANNOTATION_VERSION}; report generation will continue without AI summaries"
+          exit 0
+        fi
+
+        echo "Copilot CLI ${COPILOT_CLI_VERSION} is available"
+        echo "copilot-available=true" >> "$GITHUB_OUTPUT"
+
     - name: Generate report
       id: generate
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
-        DISABLE_SUMMARY: ${{ inputs.no-summary == 'true' && 'true' || '' }}
+        COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-token != '' && inputs.copilot-token || github.token }}
+        COPILOT_MODEL: ${{ inputs.copilot-model }}
+        DISABLE_SUMMARY: ${{ (inputs.no-summary == 'true' || steps.copilot.outputs.copilot-available != 'true') && 'true' || '' }}
       run: |
         # Build command arguments
         ARGS="generate"
