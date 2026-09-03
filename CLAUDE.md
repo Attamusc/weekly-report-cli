@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Go CLI tool called `weekly-report-cli` that generates weekly status reports by parsing structured data from GitHub issue comments. The tool fetches GitHub issues, extracts status report data using HTML comment markers, and generates markdown tables with optional AI summarization via GitHub Models.
+This is a Go CLI tool called `weekly-report-cli` that generates weekly status reports by parsing structured data from GitHub issue comments. The tool fetches GitHub issues, extracts status report data using HTML comment markers, and generates markdown tables with optional AI summarization through the GitHub Copilot SDK and CLI.
 
 ## Architecture
 
@@ -13,10 +13,10 @@ This is a Go CLI tool called `weekly-report-cli` that generates weekly status re
 The application follows a 3-phase pipeline architecture:
 
 1. **Phase A: Data Collection (Parallel)** - Resolve issues, fetch GitHub data, and extract reports without AI
-2. **Phase B: Batch Summarization (Single API Call)** - Summarize all updates in one batched request
+2. **Phase B: Batch Summarization (Batched Requests)** - Summarize eligible updates in chunks of up to 25 items
 3. **Phase C: Result Assembly** - Match summaries to issues and render markdown output
 
-This batched approach minimizes AI API calls (N issues → 1 API call), avoiding rate limits and dramatically improving performance.
+This batched approach groups eligible updates into requests of up to 25 items while preserving per-issue fallback behavior.
 
 ### Key Components
 
@@ -32,7 +32,7 @@ This batched approach minimizes AI API calls (N issues → 1 API call), avoiding
 - `internal/projects/` - GitHub Projects V2 integration with GraphQL client, view support, and filtering
 - `internal/github/` - GitHub API client with OAuth2 and retry logic
 - `internal/report/` - Report extraction from HTML comments and selection logic
-- `internal/ai/` - AI summarization interface with GitHub Models implementation
+- `internal/ai/` - Provider-neutral summarization interface with a Copilot SDK implementation
 - `internal/derive/` - Status mapping and date parsing utilities
 - `internal/format/` - Markdown table and notes rendering
 
@@ -50,9 +50,9 @@ This batched approach minimizes AI API calls (N issues → 1 API call), avoiding
 5. **Report Selection** - Select reports within time window (newest-first)
 6. **Status & Date Mapping** - Map trending status and parse target dates
 
-**Phase B: Batch Summarization (Single Request)**
+**Phase B: Batch Summarization (Batched Requests)**
 
-7. **Batch AI Summarization** - Collect all update texts and send ONE batched API request to GitHub Models
+7. **Batch AI Summarization** - Collect update texts and send chunked requests through isolated Copilot SDK sessions
 
 - Supports up to 25 items per batch (chunked if larger)
 - JSON response format with URL-to-summary mapping
@@ -188,9 +188,11 @@ go build -o weekly-report-cli .
 
 ### Optional Environment Variables
 
-- `GITHUB_MODELS_BASE_URL` - Default: `https://models.github.ai`
-- `GITHUB_MODELS_MODEL` - Default: `gpt-4o-mini`
-- `DISABLE_SUMMARY` - Set to disable AI summarization
+- `COPILOT_GITHUB_TOKEN` - Separate fine-grained PAT with account-level Copilot Requests permission; classic PATs are unsupported
+- `COPILOT_MODEL` - Copilot model (default: `claude-haiku-4.5`); availability depends on account and organization policy
+- `COPILOT_CLI_PATH` - SDK-supported executable override when `copilot` is not on `PATH`
+- `DISABLE_SUMMARY` - Set to skip Copilot startup and AI summarization
+- `AI_TIMEOUT` - Per-request timeout in seconds (default: `120`)
 
 ### CLI Usage
 
@@ -262,7 +264,7 @@ Uses bounded worker pools for parallel GitHub API requests with configurable con
 ### Error Handling
 
 - GitHub API: Retry logic for 5xx errors and rate limits
-- AI API: Jittered backoff for 429 responses
+- Copilot: Actionable stderr diagnostics and non-AI fallback when startup or inference fails
 - Input: Graceful handling of malformed URLs and missing data
 
 ## Testing Strategy
@@ -272,7 +274,7 @@ Each module should have comprehensive unit tests:
 - URL parsing with edge cases and deduplication
 - GitHub API mocking with httptest.Server
 - Report extraction with exact sample validation
-- AI client with fake server responses
+- Copilot adapter with fake runtime and session responses
 - End-to-end integration tests with mocked dependencies
 
 ## Exit Codes

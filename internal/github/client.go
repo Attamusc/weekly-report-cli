@@ -114,11 +114,14 @@ func shouldRetry(resp *http.Response) bool {
 		return true
 	}
 
-	// Retry on 403 rate limit errors (check for rate limit headers)
+	// Retry on 403 rate limit errors only when actually rate-limited.
+	// GitHub sends X-RateLimit-* headers on ALL responses (including SSO/auth 403s),
+	// so we check for Retry-After or X-RateLimit-Remaining: 0 specifically.
 	if resp.StatusCode == http.StatusForbidden {
-		// Check if this is a rate limit error by looking for rate limit headers
-		if resp.Header.Get("X-RateLimit-Remaining") != "" ||
-			resp.Header.Get("Retry-After") != "" {
+		if resp.Header.Get("Retry-After") != "" {
+			return true
+		}
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
 			return true
 		}
 	}
@@ -157,15 +160,18 @@ func isAuthorizationError(resp *http.Response) bool {
 		return true
 	}
 
-	// 403 Forbidden without rate limit headers - likely SSO authorization required
+	// 403 Forbidden — only treat as retryable rate limit when actually rate-limited.
+	// GitHub sends X-RateLimit-* headers on ALL responses including SSO/auth 403s.
 	if resp.StatusCode == http.StatusForbidden {
-		// If this is a rate limit error, it's retryable
-		if resp.Header.Get("X-RateLimit-Remaining") != "" ||
-			resp.Header.Get("Retry-After") != "" {
-			return false // This is a rate limit, not an authorization error
+		// Only a rate limit error when Retry-After is set or remaining is 0
+		if resp.Header.Get("Retry-After") != "" {
+			return false // Rate limit, not an authorization error
+		}
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			return false // Rate limit, not an authorization error
 		}
 
-		// 403 without rate limit headers is likely an authorization issue
+		// Any other 403 (SSO, permissions, etc.) is an authorization error
 		return true
 	}
 

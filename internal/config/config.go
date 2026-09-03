@@ -20,13 +20,13 @@ type Config struct {
 	Notes       bool
 	Verbose     bool
 	Quiet       bool
-	Models      struct {
-		BaseURL      string
+	Copilot     struct {
+		Token        string
 		Model        string
 		Enabled      bool
 		SystemPrompt string
-		Sentiment    bool          // true by default when AI enabled, false with --no-sentiment
-		Timeout      time.Duration // HTTP timeout for AI API requests
+		Sentiment    bool
+		Timeout      time.Duration
 	}
 	Project struct {
 		URL         string
@@ -56,6 +56,7 @@ type ConfigInput struct {
 	ProjectView        string
 	ProjectViewID      string
 	NoSentiment        bool
+	DisableSummary     bool
 }
 
 // FromEnvAndFlags creates a Config from environment variables and CLI flags
@@ -76,35 +77,22 @@ func FromEnvAndFlags(in ConfigInput) (*Config, error) {
 		return nil, errors.New("GITHUB_TOKEN environment variable is required")
 	}
 
-	// Set up AI models configuration
-	config.Models.BaseURL = os.Getenv("GITHUB_MODELS_BASE_URL")
-	if config.Models.BaseURL == "" {
-		config.Models.BaseURL = "https://models.github.ai"
+	config.Copilot.Token = os.Getenv("COPILOT_GITHUB_TOKEN")
+	config.Copilot.Model = os.Getenv("COPILOT_MODEL")
+	if config.Copilot.Model == "" {
+		config.Copilot.Model = "claude-haiku-4.5"
 	}
-
-	config.Models.Model = os.Getenv("GITHUB_MODELS_MODEL")
-	if config.Models.Model == "" {
-		config.Models.Model = "gpt-5-mini"
-	}
-
-	// Check if AI summarization is disabled
-	config.Models.Enabled = os.Getenv("DISABLE_SUMMARY") == ""
-
-	// Set custom system prompt if provided
-	config.Models.SystemPrompt = in.SummaryPrompt
-
-	// Sentiment analysis is on by default when AI is enabled
-	config.Models.Sentiment = config.Models.Enabled && !in.NoSentiment
-
-	// AI API timeout: configurable via AI_TIMEOUT env var (in seconds), default 120s
-	config.Models.Timeout = 120 * time.Second
+	config.Copilot.Enabled = os.Getenv("DISABLE_SUMMARY") == "" && !in.DisableSummary
+	config.Copilot.SystemPrompt = in.SummaryPrompt
+	config.Copilot.Sentiment = config.Copilot.Enabled && !in.NoSentiment
+	config.Copilot.Timeout = 120 * time.Second
 	if timeoutStr := os.Getenv("AI_TIMEOUT"); timeoutStr != "" {
 		timeoutSec, err := strconv.Atoi(timeoutStr)
 		if err != nil {
 			return nil, errors.New("AI_TIMEOUT must be an integer (seconds)")
 		}
 		if timeoutSec > 0 {
-			config.Models.Timeout = time.Duration(timeoutSec) * time.Second
+			config.Copilot.Timeout = time.Duration(timeoutSec) * time.Second
 		}
 	}
 

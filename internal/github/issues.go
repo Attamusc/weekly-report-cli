@@ -112,7 +112,7 @@ func fetchCloseReason(ctx context.Context, client *github.Client, ref input.Issu
 	// Look for the most recent "closed" event (iterate backwards)
 	for i := len(events) - 1; i >= 0; i-- {
 		event := events[i]
-		if event.GetEvent() != "closed" || event.GetCommitID() != "" {
+		if event.GetEvent() != StateClosed || event.GetCommitID() != "" {
 			continue
 		}
 

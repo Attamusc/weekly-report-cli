@@ -1,3 +1,7 @@
+# Initial implementation plan (superseded)
+
+This document records the original project plan. Its AI-provider design has been updated below to match the active Copilot SDK/CLI configuration.
+
 TASK CHECKLIST
 
 Phase 1 — CLI, config, link parsing
@@ -16,9 +20,9 @@ Phase 2 — GitHub fetch + report extraction/selection
 • ☐ internal/report/select.go select 0/1/≥2 reports (newest-first)
 • ☐ Tests: extract/select + http fakes
 
-Phase 3 — Summarization (GitHub Models)
+Phase 3 — Summarization (GitHub Copilot)
 • ☐ internal/ai/summarizer.go interface + noop
-• ☐ internal/ai/ghmodels.go GitHub Models client
+• ☐ internal/ai/copilot.go Copilot SDK client
 • ☐ Tests: single/multi prompts
 
 Phase 4 — Derivation + rendering (TBD + Notes)
@@ -42,10 +46,11 @@ Affected files + summary
 • --concurrency (int, default 4)
 • --no-notes (bool, default false)
 Env:
-• required GITHUB_TOKEN (private repos + GitHub Models)
-• optional GITHUB_MODELS_BASE_URL (default <https://models.github.ai>)
-• optional GITHUB_MODELS_MODEL (default gpt-4o-mini)
-• optional DISABLE_SUMMARY (if set, disable AI)
+• required GITHUB_TOKEN (GitHub issue and Projects data)
+• optional COPILOT_GITHUB_TOKEN (separate fine-grained Copilot Requests PAT; classic PATs unsupported)
+• optional COPILOT_MODEL (default claude-haiku-4.5; availability is policy-dependent)
+• optional COPILOT_CLI_PATH (Copilot CLI executable override)
+• optional DISABLE_SUMMARY (if set, skip Copilot startup and AI)
 • cmd/generate.go: read links → bounded worker pool → per-issue pipeline → accumulate rows + notes → write to stdout.
 • internal/config/config.go:
 
@@ -54,7 +59,7 @@ GitHubToken string
 SinceDays int
 Concurrency int
 Notes bool
-Models struct{ BaseURL, Model string; Enabled bool }
+Copilot struct{ Token, Model string; Enabled bool }
 }
 // FromEnvAndFlags(); error if GitHubToken == ""
 
@@ -119,7 +124,7 @@ Unit tests
 
 ⸻
 
-PHASE 3 — Summarization (GitHub Models)
+PHASE 3 — Summarization (GitHub Copilot SDK)
 
 Affected files + summary
 • internal/ai/summarizer.go:
@@ -134,28 +139,15 @@ func (NoopSummarizer) SummarizeMany(_ context.Context, _,_ string, us []string)(
 return strings.TrimSpace(strings.Join(us, " ")), nil
 }
 
-    • internal/ai/ghmodels.go:
+    • internal/ai/copilot.go:
 
-type GHModelsClient struct{
-HTTP *http.Client
-BaseURL string // default <https://models.github.ai/v1>
-Model string // default gpt-4o-mini
-Token string // use GITHUB_TOKEN PAT
-}
-func (c*GHModelsClient) Summarize(ctx context.Context, issueTitle, issueURL, update string) (string, error)
-func (c \*GHModelsClient) SummarizeMany(ctx context.Context, issueTitle, issueURL string, updates []string) (string, error)
-// POST /chat/completions with:
-// - System: "Summarize engineering status updates in ≤ 35 words, one sentence, present tense, markdown-ready, no prefatory text."
-// - User (single): "Issue: <title> (<url>)\nUpdate:\n<raw>"
-// - User (many): "Issue: <title> (<url>)\nUpdates (newest first):\n1) <u1>\n2) <u2>\n..."
-// temperature 0.2; Authorization: Bearer <GITHUB_TOKEN>
-// Handle 429 with jittered backoff.
+Copilot summarization uses the supported Go SDK backed by Copilot CLI. Direct users install `copilot` on `PATH` or set `COPILOT_CLI_PATH`. `GITHUB_TOKEN` remains the data credential; `COPILOT_GITHUB_TOKEN` is an optional separate inference credential. The default model is `claude-haiku-4.5` and can be overridden with `COPILOT_MODEL`.
 
-    • cmd/generate.go: choose summarizer = GHModelsClient unless DISABLE_SUMMARY set.
+    • cmd/generate.go: choose the Copilot summarizer unless `DISABLE_SUMMARY` is set.
 
 Unit tests
-• internal/ai/ghmodels_test.go: fake server validates single/multi payloads; returns canned completion; assert single sentence and ≤ 35 words.
-• cmd/generate_integration_test.go: fake GitHub + Models; aggregated summary when multiple reports.
+• internal/ai/copilot_test.go: fake runtime/session validates prompts, lifecycle, timeout, and response parsing.
+• cmd/generate_integration_test.go: fake GitHub + Copilot summarizer; aggregated summary when multiple reports.
 
 ⸻
 
@@ -242,6 +234,6 @@ COMMAND INTERFACE
 cat links.txt | weekly-report-cli generate --since-days 7
 
     • Input: newline-separated GitHub issue URLs (stdin or --input).
-    • Auth: required GITHUB_TOKEN (private repo + GitHub Models access).
+    • Auth: required GITHUB_TOKEN for data; optional separate COPILOT_GITHUB_TOKEN for inference.
     • Output: markdown table to stdout; optional ## Notes section (not part of the table).
     • Exit: 0 success; 2 no rows produced; >2 fatal.

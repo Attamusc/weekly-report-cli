@@ -154,7 +154,9 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	defer deps.Cleanup()
 	ctx, cfg, logger, fetcher, summarizer, issueRefs := deps.Ctx, deps.Cfg, deps.Logger, deps.Fetcher, deps.Summarizer, deps.IssueRefs
+	diagnostic := deps.Diagnostic
 
 	// Calculate time window
 	since := time.Now().AddDate(0, 0, -cfg.SinceDays)
@@ -216,11 +218,12 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 
 	// ========== PHASE B: Batch summarization (single API call) ==========
 	var batchResults map[string]ai.BatchResult
-	if cfg.Models.Enabled {
+	if cfg.Copilot.Enabled {
 		var err error
 		batchResults, err = pipeline.BatchSummarize(ctx, summarizer, allData, logger)
 		if err != nil {
-			logger.Warn("Batch summarization failed, using fallbacks", "error", err)
+			writeCopilotFallback(diagnostic, classifyCopilotFailure(err, copilotStageInference))
+			logger.Debug("Batch summarization failed, using fallbacks", "category", classifyCopilotFailure(err, copilotStageInference))
 			batchResults = make(map[string]ai.BatchResult)
 		}
 	} else {
@@ -229,7 +232,7 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// ========== PHASE C: Create final results ==========
-	rows, notes := pipeline.AssembleGenerateResults(allData, batchResults, cfg.Models.Sentiment, logger)
+	rows, notes := pipeline.AssembleGenerateResults(allData, batchResults, cfg.Copilot.Sentiment, logger)
 
 	// ========== PHASE D: Compare with previous report (if provided) ==========
 	if previousReportPath != "" {
@@ -269,7 +272,8 @@ func runGenerate(cmd *cobra.Command, args []string) error {
 		var err error
 		headerText, err = summarizer.GenerateHeader(ctx, headerItems)
 		if err != nil {
-			logger.Warn("Failed to generate summary header, skipping", "error", err)
+			writeCopilotFallback(diagnostic, classifyCopilotFailure(err, copilotStageInference))
+			logger.Debug("Failed to generate summary header, skipping", "category", classifyCopilotFailure(err, copilotStageInference))
 		}
 	}
 

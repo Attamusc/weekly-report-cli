@@ -7,7 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/Attamusc/weekly-report-cli/internal/ai"
 	"github.com/Attamusc/weekly-report-cli/internal/config"
 	"github.com/Attamusc/weekly-report-cli/internal/format"
 	"github.com/Attamusc/weekly-report-cli/internal/input"
@@ -118,6 +117,7 @@ func runDescribe(cmd *cobra.Command, args []string) error {
 		ProjectView:        describeProjectFlags.View,
 		ProjectViewID:      describeProjectFlags.ViewID,
 		NoSentiment:        true,
+		DisableSummary:     describeNoSummary,
 	}
 	resolverCfg := input.ResolverConfig{
 		ProjectURL:         describeProjectFlags.URL,
@@ -136,13 +136,9 @@ func runDescribe(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Override AI enabled based on --no-summary flag
-	if describeNoSummary {
-		deps.Cfg.Models.Enabled = false
-		deps.Summarizer = ai.NewNoopSummarizer()
-	}
-
+	defer deps.Cleanup()
 	ctx, cfg, logger, fetcher, summarizer, issueRefs := deps.Ctx, deps.Cfg, deps.Logger, deps.Fetcher, deps.Summarizer, deps.IssueRefs
+	diagnostic := deps.Diagnostic
 
 	// ========== PHASE A: Collect all issue data (parallel) ==========
 	logger.Info("Collecting issue data...", "concurrency", cfg.Concurrency)
@@ -200,11 +196,12 @@ func runDescribe(cmd *cobra.Command, args []string) error {
 
 	// ========== PHASE B: Batch description (single API call) ==========
 	var descriptions map[string]string
-	if cfg.Models.Enabled {
+	if cfg.Copilot.Enabled {
 		var err error
 		descriptions, err = pipeline.BatchDescribe(ctx, summarizer, allData, logger)
 		if err != nil {
-			logger.Warn("Batch description failed, using fallbacks", "error", err)
+			writeCopilotFallback(diagnostic, classifyCopilotFailure(err, copilotStageInference))
+			logger.Debug("Batch description failed, using fallbacks", "category", classifyCopilotFailure(err, copilotStageInference))
 			descriptions = make(map[string]string)
 		}
 	} else {

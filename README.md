@@ -1,6 +1,6 @@
 # Weekly Report CLI
 
-A Go CLI tool that generates weekly status reports by parsing structured data from GitHub issue comments. The tool fetches GitHub issues, extracts status report data using HTML comment markers, and generates markdown tables with optional AI summarization via GitHub Models.
+A Go CLI tool that generates weekly status reports by parsing structured data from GitHub issue comments. The tool fetches GitHub issues, extracts status report data using HTML comment markers, and generates markdown tables with optional AI summarization through the GitHub Copilot SDK.
 
 ## Features
 
@@ -17,7 +17,10 @@ A Go CLI tool that generates weekly status reports by parsing structured data fr
 
 ### Prerequisites
 - Go 1.24.2 or later
-- GitHub Personal Access Token
+- A GitHub token for the repositories and projects included in the report
+- [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli) for AI summaries when running the binary directly
+
+Install Copilot CLI and ensure `copilot` is on `PATH`. If it is installed elsewhere, set the SDK-supported `COPILOT_CLI_PATH` to the executable. You can omit this prerequisite when using `DISABLE_SUMMARY`; the composite action installs Copilot CLI automatically.
 
 ### Build from Source
 ```bash
@@ -62,13 +65,31 @@ Use `weekly-report-cli` directly in your GitHub Actions workflows without instal
 
 ### Basic Usage
 
+The preferred configuration uses the workflow's built-in token for Copilot and a separate token for report data. The calling workflow must grant the permission because a composite action cannot grant caller permissions. Organization policy must also allow Copilot CLI requests billed through the built-in token.
+
 ```yaml
-- uses: Attamusc/weekly-report-cli@v1
-  with:
-    github-token: ${{ secrets.GITHUB_TOKEN }}
-    project: 'org:my-org/5'
-    since-days: 7
+permissions:
+  contents: read
+  copilot-requests: write
+
+steps:
+  - uses: Attamusc/weekly-report-cli@<sha>
+    with:
+      github-token: ${{ secrets.REPORT_DATA_TOKEN }}
+      project: 'org:my-org/5'
+      since-days: 7
 ```
+
+If organization policy does not allow the built-in token, pass a separate fine-grained PAT with account-level **Copilot Requests** permission:
+
+```yaml
+- uses: Attamusc/weekly-report-cli@<sha>
+  with:
+    github-token: ${{ secrets.REPORT_DATA_TOKEN }}
+    copilot-token: ${{ secrets.COPILOT_REQUESTS_TOKEN }}
+```
+
+Keep `github-token` as the data-access credential. Classic PATs are unsupported for Copilot requests.
 
 ### Full Example: Weekly Report to Slack
 
@@ -79,6 +100,10 @@ on:
   schedule:
     - cron: '0 9 * * 1'  # Every Monday at 9 AM UTC
   workflow_dispatch:
+
+permissions:
+  contents: read
+  copilot-requests: write
 
 jobs:
   generate-report:
@@ -123,7 +148,10 @@ jobs:
 
 | Input | Description | Default |
 |-------|-------------|---------|
-| `github-token` | GitHub token with `repo` and `read:project` scopes | **Required** |
+| `github-token` | Token used only for GitHub issue and Projects data access | **Required** |
+| `copilot-token` | Optional fine-grained PAT with Copilot Requests permission; otherwise uses the calling workflow token | - |
+| `copilot-cli-version` | Exact `@github/copilot` version installed by the action | `1.0.79` |
+| `copilot-model` | Copilot model used for summarization; availability depends on account and organization policy | `claude-haiku-4.5` |
 | `version` | Version of weekly-report-cli to use | `latest` |
 | `project` | GitHub Project board URL or identifier | - |
 | `project-field` | Field name to filter by | - |
@@ -166,12 +194,24 @@ uses: Attamusc/weekly-report-cli@v1.2.3
 ### Environment Variables
 
 #### Required
-- `GITHUB_TOKEN` - Personal Access Token for GitHub API access and GitHub Models
+- `GITHUB_TOKEN` - Token used for GitHub issue and Projects data access
 
 #### Optional
-- `GITHUB_MODELS_BASE_URL` - Base URL for GitHub Models API (default: `https://models.github.ai`)
-- `GITHUB_MODELS_MODEL` - AI model to use (default: `gpt-4o-mini`)
-- `DISABLE_SUMMARY` - Set to any value to disable AI summarization
+- `COPILOT_GITHUB_TOKEN` - Fine-grained PAT with account-level Copilot Requests permission. Classic PATs are unsupported.
+- `COPILOT_MODEL` - Copilot model to use (default: `claude-haiku-4.5`). Model availability depends on account and organization policy.
+- `COPILOT_CLI_PATH` - Path to the Copilot CLI executable when `copilot` is not on `PATH`.
+- `DISABLE_SUMMARY` - Set to any value to disable Copilot startup and AI summarization.
+- `AI_TIMEOUT` - Per-request timeout in seconds (default: `120`).
+
+Keep data and inference credentials separate for direct use:
+
+```bash
+export GITHUB_TOKEN='<data token>'
+export COPILOT_GITHUB_TOKEN='<fine-grained Copilot Requests PAT>'
+weekly-report-cli generate ...
+```
+
+If `COPILOT_GITHUB_TOKEN` is omitted, the Copilot SDK can use stored Copilot CLI or `gh` authentication.
 
 ### Setting up GitHub Token
 1. Go to GitHub Settings > Developer settings > Personal access tokens
@@ -226,142 +266,6 @@ weekly-report-cli generate \
   --since-days 14
 ```
 
-### Input Modes
-
-The tool supports three input modes:
-
-#### 1. URL List Mode (Traditional)
-Provide GitHub issue URLs directly, one per line:
-```
-https://github.com/owner/repo/issues/123
-https://github.com/owner/repo/issues/456
-https://github.com/another-owner/another-repo/issues/789
-```
-
-#### 2. GitHub Projects Board Mode (NEW)
-Fetch issues automatically from a GitHub Projects V2 board using field-based filtering:
-
-```bash
-# Simple usage with defaults (Status field: "In Progress,Done,Blocked")
-weekly-report-cli generate --project "org:my-org/5"
-
-# Custom field and values
-weekly-report-cli generate \
-  --project "org:my-org/5" \
-  --project-field "Priority" \
-  --project-field-values "High,Critical" \
-  --since-days 7
-```
-
-**Project URL Formats:**
-- Full URL: `https://github.com/orgs/my-org/projects/5`
-- Full URL (user): `https://github.com/users/username/projects/3`
-- Short form: `org:my-org/5`
-- Short form (user): `user:username/3`
-
-**Filtering Options:**
-- `--project-field`: The project field to filter on (default: "Status")
-- `--project-field-values`: Comma-separated list of values to match (default: "In Progress,Done,Blocked")
-- `--project-include-prs`: Include pull requests (default: issues only)
-- `--project-max-items`: Maximum items to fetch (default: 100)
-
-**Filter Behavior:**
-- Multiple values within `--project-field-values` use **OR logic** (matches any value)
-- Multiple `--project-field` flags use **AND logic** (matches all filters)
-- Text fields use case-insensitive substring matching
-- Single-select fields use exact matching
-- Draft issues are always excluded
-
-**Using Project Views (NEW):**
-
-Instead of manually specifying field filters, you can reference pre-configured GitHub Projects views by name or ID:
-
-```bash
-# Use a view by name
-weekly-report-cli generate \
-  --project "org:my-org/5" \
-  --project-view "Blocked Items" \
-  --since-days 7
-
-# Use a view by ID (recommended for automation)
-weekly-report-cli generate \
-  --project "org:my-org/5" \
-  --project-view-id "PVT_kwDOABCDEF" \
-  --since-days 14
-
-# Combine view with additional filters
-weekly-report-cli generate \
-  --project "org:my-org/5" \
-  --project-view "Current Sprint" \
-  --project-field "Priority" \
-  --project-field-values "High,Critical"
-```
-
-**View Options:**
-- `--project-view`: View name (e.g., "Blocked Items") - case-insensitive matching
-- `--project-view-id`: View global node ID (e.g., "PVT_kwDOABCDEF") - takes precedence over name
-
-**View Benefits:**
-- Simpler commands (reference views instead of typing filters)
-- Single source of truth (filters defined in GitHub UI)
-- Automatic sync (view changes immediately reflected)
-
-> **See also**: [docs/PROJECT_VIEWS.md](docs/PROJECT_VIEWS.md) for detailed view usage guide.
-
-#### 3. Mixed Mode
-Combine both project board filtering and manual URL lists:
-
-```bash
-# Use defaults for project board, add manual issues
-weekly-report-cli generate \
-  --project "org:my-org/5" \
-  --input additional-issues.txt \
-  --since-days 7
-```
-
-Issues are automatically deduplicated across both sources.
-
-> **See also**: [docs/PROJECT_BOARDS.md](docs/PROJECT_BOARDS.md) for detailed project board usage guide.
-
-### Report Data Format
-
-Reports are embedded in GitHub issue comments using HTML comment markers:
-
-```html
-<!-- data key="isReport" value="true" -->
-<!-- data key="trending" start -->🟢 on track<!-- data end -->
-<!-- data key="target_date" start -->2025-08-06<!-- data end -->
-<!-- data key="update" start -->
-Completed the user authentication module.
-- Added OAuth2 integration
-- Implemented session management
-- Added security headers
-<!-- data end -->
-```
-
-#### Status Values
-The following status indicators are automatically mapped to standardized emojis:
-
-- `🟢`, `green`, `on track` → `:green_circle: On Track`
-- `🟡`, `yellow`, `at risk` → `:yellow_circle: At Risk`
-- `🔴`, `red`, `blocked`, `off track` → `:red_circle: Off Track`
-- `⚪`, `white`, `not started` → `:white_circle: Not Started`
-- `🟣`, `purple`, `done`, `complete` → `:purple_circle: Done`
-
-### Example Output
-
-```markdown
-| Status | Epic | Target Date | Summary |
-|--------|------|-------------|---------|
-| :green_circle: On Track | Authentication System (#123) | 2025-08-06 | Completed OAuth2 integration and session management |
-| :yellow_circle: At Risk | User Dashboard (#456) | 2025-08-10 | Frontend components completed, backend API in progress |
-| :purple_circle: Done | Payment Gateway (#789) | 2025-08-01 | Successfully integrated Stripe payment processing |
-
-## Notes
-- 3 issues processed
-- 2 issues had recent updates
-- AI summaries generated using gpt-4o-mini
-```
 
 ## Architecture
 
@@ -383,7 +287,7 @@ The application follows a 4-phase pipeline architecture:
 ├── internal/
 │   ├── ai/                # AI summarization
 │   │   ├── summarizer.go  # Interface definition
-│   │   └── ghmodels.go    # GitHub Models implementation
+│   │   └── copilot.go     # GitHub Copilot SDK implementation
 │   ├── config/            # Configuration management
 │   │   └── config.go      # Environment and CLI flag handling
 │   ├── derive/            # Data transformation utilities
@@ -513,7 +417,7 @@ go mod tidy
 The tool handles various error conditions gracefully:
 
 - **GitHub API Errors**: Automatic retry for 5xx errors and rate limits
-- **AI API Errors**: Jittered backoff for 429 responses
+- **Copilot Errors**: Visible stderr diagnostics followed by non-AI fallback content
 - **Input Validation**: Clear error messages for malformed URLs
 - **Missing Data**: Graceful handling of incomplete report data
 - **Network Issues**: Timeout handling and connection retry logic
@@ -593,13 +497,15 @@ No qualifying reports found in the specified time window
 - Check that the `--since-days` parameter includes the time period of your reports
 - Ensure comments contain the `<!-- data key="isReport" value="true" -->` marker
 
-**AI Summarization Failures**
-```bash
-Failed to generate AI summary: API rate limit exceeded
+**Copilot Summarization Failures**
+```text
+Copilot summarization unavailable (missing executable); using non-AI fallback content. Install GitHub Copilot CLI and ensure copilot is on PATH.
 ```
-- The tool will continue without AI summaries if the service is unavailable
-- Set `DISABLE_SUMMARY=true` to skip AI processing entirely
-- Check GitHub Models API quota and rate limits
+- Copilot startup, authorization, model-availability, and inference failures produce one actionable diagnostic on stderr, then report generation continues with non-AI fallback content.
+- These fallback diagnostics remain visible with `--quiet`; report stdout stays clean.
+- For Actions authorization failures, verify `copilot-requests: write` on the calling workflow and organization policy, or provide `copilot-token` as a fine-grained Copilot Requests PAT.
+- For model failures, choose an available model with `COPILOT_MODEL` or the action's `copilot-model` input. Availability is policy-dependent; the tool does not silently switch models.
+- Set `DISABLE_SUMMARY=true` for `generate`, use `describe --no-summary`, or set action input `no-summary: true` to skip Copilot entirely.
 
 ### Debug Mode
 For debugging, you can examine the raw data extraction by looking at the test files or adding debug output to the extraction functions.
